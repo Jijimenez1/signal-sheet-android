@@ -1,16 +1,14 @@
-# Signal Sheet for Android
+# Signal Sheet
 
-An Android app that opens Signal Sheet full screen. It runs through Chrome, so a Claude sign-in carries over.
+Weekly stock odds, Strong buys, a watchlist and technical analysis. No account or sign-in needed.
 
-## Install (anyone)
+- **Android app:** https://github.com/Jijimenez1/signal-sheet-android/releases/latest (tap **SignalSheet.apk**, then Install; allow "install unknown apps" if asked)
+- **Web / iPhone:** https://jijimenez1.github.io/signal-sheet-android/ (on iPhone: Safari, Share, Add to Home Screen)
 
-1. On your Android phone, open **https://github.com/Jijimenez1/signal-sheet-android/releases/latest**
-2. Tap **SignalSheet.apk** to download it, then open it and tap **Install**. If asked, allow your browser to "install unknown apps".
-3. Open **Signal Sheet** and sign in with a free Claude account.
-4. The owner has to share Signal Sheet with your Claude account (Share → add your email) before you can see the picks.
+Estimates from public data. Not financial advice.
 
-New versions install right over the old one. Your sign-in is kept.
+## How it works
 
-## Building
-
-Every push to `main` builds a signed APK and publishes it as the latest release.
+- `docs/` is the public site (GitHub Pages). `docs/data/app.json` holds the data and is republished automatically after each update.
+- `tools/build_page.py` builds `docs/index.html` from the Claude version of the page; `tools/build_app_json.py` builds `app.json` from a data export.
+- `app/` is a small Android WebView app that opens the public site. Every push to `main` that touches `app/` builds a signed APK and publishes it as the latest release.

@@ -11,7 +11,7 @@ android {
     defaultConfig {
         applicationId = "com.javi.signalsheet"
         minSdk = 26
-        targetSdk = 35
+        targetSdk = 34
         versionCode = buildNumber
         versionName = "1.$buildNumber"
     }
@@ -41,7 +41,4 @@ android {
     }
 }
 
-dependencies {
-    // Opens the Signal Sheet page full-screen in Chrome, so the Claude sign-in carries over
-    implementation("com.google.androidbrowserhelper:androidbrowserhelper:2.5.0")
-}
+
