@@ -1,23 +1,16 @@
 # Signal Sheet for Android
 
-A small Android app that opens your Signal Sheet full-screen. It uses Chrome under the hood, so your Claude sign-in carries over and the weekly picks, watchlist and chart lab all work.
+An Android app that opens Signal Sheet full screen. It runs through Chrome, so a Claude sign-in carries over.
 
-## Build the APK (no computer needed)
+## Install (anyone)
 
-1. Create a free account at github.com and make a new repository (e.g. `signal-sheet-android`).
-2. Upload everything in this folder to the repository, keeping the folder structure (including `.github/workflows`).
-3. Open the **Actions** tab. The "Build Signal Sheet APK" job starts on its own (or tap **Run workflow**). It takes about 3–5 minutes.
-4. When it finishes, open the run and download **SignalSheet-apk** under Artifacts. Unzip it to get `app-debug.apk`.
+1. On your Android phone, open **https://github.com/Jijimenez1/signal-sheet-android/releases/latest**
+2. Tap **SignalSheet.apk** to download it, then open it and tap **Install**. If asked, allow your browser to "install unknown apps".
+3. Open **Signal Sheet** and sign in with a free Claude account.
+4. The owner has to share Signal Sheet with your Claude account (Share → add your email) before you can see the picks.
 
-## Install on your phone
+New versions install right over the old one. Your sign-in is kept.
 
-1. Open `app-debug.apk` on your Android phone.
-2. If asked, allow your browser or file app to "install unknown apps".
-3. Tap **Install**, then open **Signal Sheet** from your app drawer.
-4. The first time, sign in to Claude if prompted.
+## Building
 
-## Notes
-
-- Chrome needs to be installed (it is on most Android phones).
-- A thin address bar may show at the top. That's Android's safety check for apps that open a website they don't own; everything works the same.
-- The app always loads the live page, so weekly updates show up automatically. There's nothing to reinstall.
+Every push to `main` builds a signed APK and publishes it as the latest release.
