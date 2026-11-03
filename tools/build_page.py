@@ -5,26 +5,37 @@ stand-in for the Claude data API, so the app code stays identical. Owner-only co
 import sys, pathlib
 src = pathlib.Path(sys.argv[1]).read_text()
 shim = r"""<script>
-/* Public data source: data/app.json on GitHub Pages, refreshed every 5 minutes. Read-only. */
+/* Public data source: data/app.json on GitHub Pages, refreshed every 5 minutes. Read-only, except
+   the watchlist, which lives only in this phone's storage (never sent anywhere). */
 (function(){
-  let APP=null; const subs=[];
+  let APP=null, lastOk=null; const subs=[], WL_KEY="ss_watchlist_v1";
+  const wlGet=()=>{ try{ const v=JSON.parse(localStorage.getItem(WL_KEY)||"[]"); return Array.isArray(v)?v.filter(x=>typeof x==="string"):[]; }catch(e){ return []; } };
+  const wlSet=a=>{ try{ localStorage.setItem(WL_KEY,JSON.stringify(a)); }catch(e){} };
   const docsOf=(arr)=>({metadata:{fromCache:false,hasPendingWrites:false},docs:arr,size:arr.length,empty:!arr.length,docChanges:()=>[]});
   const D=(id,v)=>({id,exists:true,data:()=>v,metadata:{fromCache:false}});
   function coll(p){
+    if(p==="watchlist") return wlGet().map(t=>D(t,{ticker:t}));
     if(!APP) return [];
     if(p==="weeks") return (APP.weeks||[]).slice().sort((a,b)=>b.weekOf<a.weekOf?-1:1).map(w=>D(w.weekOf,w));
     if(p==="prices") return Object.keys(APP.prices||{}).map(k=>D(k,APP.prices[k]));
-    if(p==="wlscores") return Object.keys(APP.wlscores||{}).map(k=>D(k,APP.wlscores[k]));
-    if(p==="watchlist") return (APP.watchlist||[]).map(t=>D(t,{ticker:t}));
     return [];
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
-  function push(){ subs.forEach(s=>{ try{ s.kind==="c"?s.cb(docsOf(coll(s.p))):s.cb(one(s.p)); }catch(e){} }); }
-  async function load(){ try{ const r=await fetch("data/app.json?t="+Date.now(),{cache:"no-store"}); if(r.ok){ APP=await r.json(); push(); } }catch(e){} }
-  const q=p=>({orderBy(){return this},limit(){return this},where(){return this},onSnapshot(cb){ const s={kind:"c",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(docsOf(coll(p))),0); return()=>{}; },get:async()=>docsOf(coll(p))});
-  const db={collection:q,doc:p=>({onSnapshot(cb){ const s={kind:"d",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(one(p)),0); return()=>{}; },get:async()=>one(p),set:async()=>{throw{code:"invalid_argument"}},update:async()=>{throw{code:"invalid_argument"}},delete:async()=>{throw{code:"invalid_argument"}}})};
+  function push(only){ subs.forEach(s=>{ if(only&&s.p!==only) return; try{ s.kind==="c"?s.cb(docsOf(coll(s.p))):s.cb(one(s.p)); }catch(e){} }); }
+  async function load(){ try{ const r=await fetch("data/app.json?t="+Date.now(),{cache:"no-store"}); if(r.ok){ APP=await r.json(); lastOk=Date.now(); push(); return true; } }catch(e){} return false; }
+  const ready=p=>p==="watchlist"||APP;
+  const q=p=>({orderBy(){return this},limit(){return this},where(){return this},onSnapshot(cb){ const s={kind:"c",p,cb}; subs.push(s); if(ready(p)) setTimeout(()=>cb(docsOf(coll(p))),0); return()=>{}; },get:async()=>docsOf(coll(p))});
+  const deny=async()=>{ throw {code:"invalid_argument",message:"read-only"}; };
+  function docRef(p){
+    const m=/^watchlist\/([A-Z0-9.\-]{1,10})$/.exec(p);
+    return {onSnapshot(cb){ const s={kind:"d",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(one(p)),0); return()=>{}; },get:async()=>one(p),
+      set:m?async()=>{ const a=wlGet(); if(!a.includes(m[1])){ a.push(m[1]); wlSet(a); } push("watchlist"); }:deny,
+      update:m?async()=>{}:deny,
+      delete:m?async()=>{ wlSet(wlGet().filter(x=>x!==m[1])); push("watchlist"); }:deny};
+  }
+  const db={collection:q,doc:docRef};
   window.claude={use:async n=>n==="db"?db:n==="user"?{isOwner:()=>false,canEdit:()=>false,can:()=>false}:null};
-  window.SS_PUBLIC={reload:load};
+  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated};
   load(); setInterval(load,5*60*1000);
   document.addEventListener("visibilitychange",()=>{ if(!document.hidden) load(); });
 })();
@@ -33,7 +44,8 @@ shim = r"""<script>
 page = src
 # public wording
 page = page.replace('<li>They need a free Claude account to sign in.</li>', '<li>No account or sign-in needed. It opens straight to the picks.</li>')
-page = page.replace('<li id="shareOwnerStep">Give them access: on claude.ai, open Signal Sheet, tap <b>Share</b>, and add their email as a Viewer.</li>', '')
+import re
+page = re.sub(r'<li id="shareOwnerStep">.*?</li>', '<li id="shareOwnerStep">Each person\'s watchlist stays on their own phone. Nobody else can see it.</li>', page, count=1, flags=re.S)
 page = page.replace('<p>iPhone users: open the Signal Sheet link in Safari, tap Share, then Add to Home Screen.</p>', '<p>iPhone users: open <b>jijimenez1.github.io/signal-sheet-android</b> in Safari, tap Share, then Add to Home Screen.</p>')
 head = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">

@@ -4,26 +4,37 @@
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 </head><body><script>
-/* Public data source: data/app.json on GitHub Pages, refreshed every 5 minutes. Read-only. */
+/* Public data source: data/app.json on GitHub Pages, refreshed every 5 minutes. Read-only, except
+   the watchlist, which lives only in this phone's storage (never sent anywhere). */
 (function(){
-  let APP=null; const subs=[];
+  let APP=null, lastOk=null; const subs=[], WL_KEY="ss_watchlist_v1";
+  const wlGet=()=>{ try{ const v=JSON.parse(localStorage.getItem(WL_KEY)||"[]"); return Array.isArray(v)?v.filter(x=>typeof x==="string"):[]; }catch(e){ return []; } };
+  const wlSet=a=>{ try{ localStorage.setItem(WL_KEY,JSON.stringify(a)); }catch(e){} };
   const docsOf=(arr)=>({metadata:{fromCache:false,hasPendingWrites:false},docs:arr,size:arr.length,empty:!arr.length,docChanges:()=>[]});
   const D=(id,v)=>({id,exists:true,data:()=>v,metadata:{fromCache:false}});
   function coll(p){
+    if(p==="watchlist") return wlGet().map(t=>D(t,{ticker:t}));
     if(!APP) return [];
     if(p==="weeks") return (APP.weeks||[]).slice().sort((a,b)=>b.weekOf<a.weekOf?-1:1).map(w=>D(w.weekOf,w));
     if(p==="prices") return Object.keys(APP.prices||{}).map(k=>D(k,APP.prices[k]));
-    if(p==="wlscores") return Object.keys(APP.wlscores||{}).map(k=>D(k,APP.wlscores[k]));
-    if(p==="watchlist") return (APP.watchlist||[]).map(t=>D(t,{ticker:t}));
     return [];
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
-  function push(){ subs.forEach(s=>{ try{ s.kind==="c"?s.cb(docsOf(coll(s.p))):s.cb(one(s.p)); }catch(e){} }); }
-  async function load(){ try{ const r=await fetch("data/app.json?t="+Date.now(),{cache:"no-store"}); if(r.ok){ APP=await r.json(); push(); } }catch(e){} }
-  const q=p=>({orderBy(){return this},limit(){return this},where(){return this},onSnapshot(cb){ const s={kind:"c",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(docsOf(coll(p))),0); return()=>{}; },get:async()=>docsOf(coll(p))});
-  const db={collection:q,doc:p=>({onSnapshot(cb){ const s={kind:"d",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(one(p)),0); return()=>{}; },get:async()=>one(p),set:async()=>{throw{code:"invalid_argument"}},update:async()=>{throw{code:"invalid_argument"}},delete:async()=>{throw{code:"invalid_argument"}}})};
+  function push(only){ subs.forEach(s=>{ if(only&&s.p!==only) return; try{ s.kind==="c"?s.cb(docsOf(coll(s.p))):s.cb(one(s.p)); }catch(e){} }); }
+  async function load(){ try{ const r=await fetch("data/app.json?t="+Date.now(),{cache:"no-store"}); if(r.ok){ APP=await r.json(); lastOk=Date.now(); push(); return true; } }catch(e){} return false; }
+  const ready=p=>p==="watchlist"||APP;
+  const q=p=>({orderBy(){return this},limit(){return this},where(){return this},onSnapshot(cb){ const s={kind:"c",p,cb}; subs.push(s); if(ready(p)) setTimeout(()=>cb(docsOf(coll(p))),0); return()=>{}; },get:async()=>docsOf(coll(p))});
+  const deny=async()=>{ throw {code:"invalid_argument",message:"read-only"}; };
+  function docRef(p){
+    const m=/^watchlist\/([A-Z0-9.\-]{1,10})$/.exec(p);
+    return {onSnapshot(cb){ const s={kind:"d",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(one(p)),0); return()=>{}; },get:async()=>one(p),
+      set:m?async()=>{ const a=wlGet(); if(!a.includes(m[1])){ a.push(m[1]); wlSet(a); } push("watchlist"); }:deny,
+      update:m?async()=>{}:deny,
+      delete:m?async()=>{ wlSet(wlGet().filter(x=>x!==m[1])); push("watchlist"); }:deny};
+  }
+  const db={collection:q,doc:docRef};
   window.claude={use:async n=>n==="db"?db:n==="user"?{isOwner:()=>false,canEdit:()=>false,can:()=>false}:null};
-  window.SS_PUBLIC={reload:load};
+  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated};
   load(); setInterval(load,5*60*1000);
   document.addEventListener("visibilitychange",()=>{ if(!document.hidden) load(); });
 })();
@@ -561,7 +572,7 @@ h2{font-size:24px;font-weight:700;letter-spacing:-.02em}
     <ol class="steps">
       <li>Send them the link. They tap <b>SignalSheet.apk</b> to download, then Install (allow “install unknown apps” if asked).</li>
       <li>No account or sign-in needed. It opens straight to the picks.</li>
-      <li id="shareOwnerStep">Your controls (refresh, scan, watchlist) stay here in your Claude version. Friends see the same picks, updated through the day.</li>
+      <li id="shareOwnerStep">Each person's watchlist stays on their own phone. Nobody else can see it.</li>
     </ol>
     <p>iPhone users: open <b>jijimenez1.github.io/signal-sheet-android</b> in Safari, tap Share, then Add to Home Screen.</p>
   </section>
@@ -594,6 +605,8 @@ const HZ = {
   lt:{name:"6–12 months", short:"Hold", base:58, w:{buzz:.05,momentum:.15,analyst:.35,fund:.45}}
 };
 const FACT = [["buzz","Buzz"],["analyst","Analysts"],["momentum","Trend"],["fund","Business"]];
+const PUB=!!window.SS_PUBLIC;
+const canWatch=()=>S.owner||PUB;
 const S = {sig:null, sigOnly60:false, owner:false, h:"sw", f:"all", q:"", weeks:[], week:null, watch:[], watchDocs:{}, wl:{}, chart:{}, prices:{}};
 let db=null;
 const $=id=>document.getElementById(id);
@@ -727,7 +740,7 @@ function wlState(t){
 }
 function renderWatch(){
   const el=$("wlList");
-  if(!S.watch.length){ el.innerHTML='<div class="empty"><b>Nothing here yet</b>Add a ticker above. It gets researched and scored in a few minutes.</div>'; return; }
+  if(!S.watch.length){ el.innerHTML='<div class="empty"><b>Nothing here yet</b>'+(PUB?'Add a ticker above, or tap ★ on any stock. Your list stays on this phone.':'Add a ticker above. It gets researched and scored in a few minutes.')+'</div>'; return; }
   const items=S.watch.map(t=>{ const st=wlState(t); if(st.p) st.v=prob(st.p,S.h); return {t,st}; });
   items.sort((a,b)=>(b.st.v??-1)-(a.st.v??-1)||a.t.localeCompare(b.t));
   const rm=t=>'<button class="rm" data-rm="'+esc(t)+'" aria-label="Remove '+esc(t)+'">×</button>';
@@ -735,7 +748,7 @@ function renderWatch(){
     if(st.p){ const p=Object.assign({},st.p,{_v:st.v}); return rowHTML(p,rm(t)).replace('class="row rhrow"','class="row rhrow wl"'); }
     const msg=st.pending!=null?'<span class="verdict v-lean"><i></i>Scoring now'+(st.pending?' · '+st.pending+' min':'')+'</span><span class="sub">Usually 3–5 minutes</span>'
       :st.err?'<span class="verdict v-weak"><i></i>'+esc(st.err)+'</span>'
-      :'<span class="sub">Not scored yet</span><button class="linkbtn" data-score="'+esc(t)+'" type="button">Score now</button>';
+      :PUB?'<span class="sub">Not on this week\'s lists yet</span>':'<span class="sub">Not scored yet</span><button class="linkbtn" data-score="'+esc(t)+'" type="button">Score now</button>';
     return '<div class="row rhrow wl" style="cursor:default"><div class="rl"><b>'+esc(t)+'</b><span class="rm2" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+msg+'</span></div>'+spark(t)+'<div class="rr">'+(quoteOf(t)?'<span class="rq num">'+rhPrice(+quoteOf(t).price)+'</span>':'')+'</div>'+rm(t)+'</div>';
   }).join("");
 }
@@ -792,7 +805,7 @@ function openSheet(t){
   const stats=[["P/E",fu.pe!=null?fu.pe.toFixed(1):"–"],["Fwd P/E",fu.fpe!=null?fu.fpe.toFixed(1):"–"],["52w high",fu.hi!=null?rhPrice(fu.hi):"–"],["52w low",fu.lo!=null?rhPrice(fu.lo):"–"],["Size",({large:"Large",mid:"Mid",small:"Small"}[p.cap]||"–")],["TA score",ta&&ta.score!=null?ta.score+" · "+ta.verdict:"–"]];
   $("sheetIn").innerHTML=
     '<div class="sheet-head"><button class="closebtn" id="shClose" aria-label="Back"><svg viewBox="0 0 24 24"><path d="M15 5l-7 7 7 7"/></svg></button><div class="shtitle"><b id="shTitle">'+esc(t)+'</b></div>'+
-      (S.owner&&db?'<button class="closebtn" id="shStar" aria-label="'+(watching?"Remove from watchlist":"Add to watchlist")+'"><svg viewBox="0 0 24 24" style="'+(watching?"fill:var(--up);stroke:var(--up)":"")+'"><path d="M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6L12 16.2 7 19l1.2-5.6L4 9.6 9.6 9z"/></svg></button>':'<span style="width:48px"></span>')+'</div>'+
+      (canWatch()&&db?'<button class="closebtn" id="shStar" aria-label="'+(watching?"Remove from watchlist":"Add to watchlist")+'"><svg viewBox="0 0 24 24" style="'+(watching?"fill:var(--up);stroke:var(--up)":"")+'"><path d="M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6L12 16.2 7 19l1.2-5.6L4 9.6 9.6 9z"/></svg></button>':'<span style="width:48px"></span>')+'</div>'+
     '<div class="rhname">'+esc(p.name||t)+'</div>'+
     '<div id="rhBox" class="rhbox"></div>'+
     '<div class="rhodds"><div class="rhodds-l">'+dial(v,92,9)+'</div><div style="display:grid;gap:6px;min-width:0"><div class="sub">Chance it finishes higher</div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'+verdict(v)+'<span class="sub">'+HZ[S.h].name+' · typical stock '+base+'%</span></div><div class="rowtags">'+tags(p)+'</div></div></div>'+
@@ -809,7 +822,7 @@ function openSheet(t){
       (p.social?'<div class="blk plain"><h3>'+icon.chat+'What people are saying</h3><p>'+esc(p.social)+'</p></div>':'')+
     '</div>'+
     '<p class="sub" style="text-align:center;font-size:12px">Estimates from public data. Not financial advice.</p>'+
-    '<div class="rhbar">'+(S.owner&&db?'<button class="btn rhbig '+(watching?'ghost':'')+'" id="shWatch" type="button">'+(watching?'Watching ✓':'Watch')+'</button>':'')+'<button class="btn rhbig ghost" id="shChart" type="button">Chart lab</button></div>';
+    '<div class="rhbar">'+(canWatch()&&db?'<button class="btn rhbig '+(watching?'ghost':'')+'" id="shWatch" type="button">'+(watching?'Watching ✓':'Watch')+'</button>':'')+'<button class="btn rhbig ghost" id="shChart" type="button">Chart lab</button></div>';
   $("sheet").classList.add("on"); $("scrim").classList.add("on"); $("sheet").setAttribute("aria-hidden","false");
   $("sheet").scrollTop=0; document.body.style.overflow="hidden";
   rhRender(t);
@@ -859,7 +872,7 @@ $("wlForm").addEventListener("submit",async e=>{
   if(S.watch.includes(t)){ inp.value=""; return; }
   try{ await db.doc("watchlist/"+t).set({ticker:t,added:new Date().toISOString()}); inp.value=""; }
   catch(err){ $("wlErr").textContent="Couldn't save "+t+". Check your connection and try again."; return; }
-  if(!findPick(t)) scoreNow(t);
+  if(!findPick(t)&&!PUB) scoreNow(t);
 });
 async function scoreNow(t){
   const req=new Date().toISOString();
@@ -876,7 +889,7 @@ $("wlList").addEventListener("click",e=>{ const t=e.target.getAttribute("data-sc
 const VIEWS=["today","strong","watch","chart","guide"];
 function showView(v){ if(!VIEWS.includes(v)) v="today";
   VIEWS.forEach(x=>$("v-"+x).hidden=x!==v);
-  $("fab").hidden=!(v==="watch"&&S.owner);
+  $("fab").hidden=!(v==="watch"&&canWatch());
   document.querySelectorAll(".tabbar a").forEach(a=>a.dataset.v===v?a.setAttribute("aria-current","page"):a.removeAttribute("aria-current"));
   window.scrollTo(0,0); }
 window.addEventListener("hashchange",()=>{ if(openT) closeSheet(); showView(location.hash.slice(1)); });
@@ -1100,6 +1113,9 @@ function renderRefresh(){
   if(busy){ const m=Math.round((Date.now()-new Date(refStatus.startedAt))/6e4); $("refText").textContent=(refStatus.state==="running"?"Getting live prices":"Starting refresh")+(m>0?" · "+m+" min":"")+". Usually 2–3 minutes; the app updates by itself."; }
 }
 $("refreshBtn").addEventListener("click",async()=>{
+  if(PUB){ const b=$("refreshBtn"); if(b.getAttribute("aria-busy")==="true") return; b.setAttribute("aria-busy","true");
+    const ok=await window.SS_PUBLIC.reload(); b.setAttribute("aria-busy","false");
+    const u=window.SS_PUBLIC.updated(); toast(ok?("Up to date. Prices as of "+(u?new Date(u).toLocaleString(undefined,{weekday:"short",hour:"numeric",minute:"2-digit"}):"the latest update")+"."):"Couldn't reach the server. Check your connection and try again."); return; }
   if(refBusy()){ toast("Already refreshing. Hang tight."); return; }
   if(!db){ toast("Sign in to Claude to refresh."); return; }
   const startedAt=new Date().toISOString();
@@ -1129,10 +1145,10 @@ $("copyApk").addEventListener("click",async()=>{
   catch(e){ const r=document.createRange(); r.selectNodeContents($("apkLink")); const sel=getSelection(); sel.removeAllRanges(); sel.addRange(r); toast("Link selected. Tap Copy in the menu."); }
 });
 function applyRole(){
-  $("refreshBtn").hidden=!S.owner; $("scanBtn").hidden=!S.owner;
-  $("wlForm").hidden=!S.owner;
-  $("wlHelp").textContent=S.owner?"Add any ticker. It gets researched and scored in a few minutes.":"These are the stocks the owner is watching. Tap one for its forecast.";
-  $("shareOwnerStep").hidden=!S.owner;
+  $("refreshBtn").hidden=!(S.owner||PUB); $("scanBtn").hidden=!S.owner;
+  $("wlForm").hidden=!canWatch();
+  $("wlHelp").textContent=S.owner?"Add any ticker. It gets researched and scored in a few minutes.":PUB?"Add any ticker. Your watchlist stays on this phone, and nobody else can see it. Stocks show their odds when they're on this week's list or Strong buys.":"Watchlists aren't available in this view.";
+  $("shareOwnerStep").hidden=!(S.owner||PUB);
   showView(location.hash.slice(1)||"today");
 }
 
@@ -1187,7 +1203,9 @@ async function start(){
       if(!S.weeks.length){ st.textContent="First sheet arrives Monday"; renderWeeks(); return; }
       S.week=(S.week&&S.weeks.find(w=>w.weekOf===S.week.weekOf))||S.weeks[0];
       const g=S.week.generatedAt?new Date(S.week.generatedAt):null;
-      st.dataset.base=(S.week.picks||[]).length+" stocks"+(g?", picks "+g.toLocaleDateString(undefined,{month:"short",day:"numeric"}):""); updStatus();
+      st.dataset.base=(S.week.picks||[]).length+" stocks"+(g?", picks "+g.toLocaleDateString(undefined,{month:"short",day:"numeric"}):"");
+      if(PUB&&window.SS_PUBLIC.updated()){ const u=new Date(window.SS_PUBLIC.updated()); if(!isNaN(u)) st.dataset.ref="updated "+u.toLocaleString(undefined,{hour:"numeric",minute:"2-digit"}); }
+      updStatus();
       renderWeeks(); renderAll();
     },err=>{ clearTimeout(timer); st.textContent="Couldn't load picks. Try reopening."; });
     db.collection("watchlist").onSnapshot(snap=>{ const m={}; snap.docs.forEach(d=>m[d.id]=d.data()); S.watchDocs=m; S.watch=Object.keys(m).sort(); renderAll(); },()=>{});
