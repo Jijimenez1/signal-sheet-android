@@ -7,7 +7,9 @@
 /* Public data source: data/app.json on GitHub Pages, refreshed every 5 minutes. Read-only, except
    the watchlist, which lives only in this phone's storage (never sent anywhere). */
 (function(){
-  let APP=null, lastOk=null; const subs=[], WL_KEY="ss_watchlist_v1";
+  let APP=null, lastOk=null, UNI=null; const subs=[], WL_KEY="ss_watchlist_v1", PX={}, MISS={};
+  /* Daily price files for any popular US stock or ETF (built each evening by universe.yml) */
+  const DATA="https://raw.githubusercontent.com/Jijimenez1/signal-sheet-android/data/";
   const wlGet=()=>{ try{ const v=JSON.parse(localStorage.getItem(WL_KEY)||"[]"); return Array.isArray(v)?v.filter(x=>typeof x==="string"):[]; }catch(e){ return []; } };
   const wlSet=a=>{ try{ localStorage.setItem(WL_KEY,JSON.stringify(a)); }catch(e){} };
   const docsOf=(arr)=>({metadata:{fromCache:false,hasPendingWrites:false},docs:arr,size:arr.length,empty:!arr.length,docChanges:()=>[]});
@@ -16,7 +18,7 @@
     if(p==="watchlist") return wlGet().map(t=>D(t,{ticker:t}));
     if(!APP) return [];
     if(p==="weeks") return (APP.weeks||[]).slice().sort((a,b)=>b.weekOf<a.weekOf?-1:1).map(w=>D(w.weekOf,w));
-    if(p==="prices") return Object.keys(APP.prices||{}).map(k=>D(k,APP.prices[k]));
+    if(p==="prices"){ const m=Object.assign({},PX,APP.prices||{}); for(const k in PX){ if(m[k]!==PX[k]&&!m[k].name) m[k]=Object.assign({},m[k],{name:PX[k].name}); } return Object.keys(m).map(k=>D(k,m[k])); }
     return [];
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
@@ -44,11 +46,23 @@
     }
     return null;
   }
+  async function loadUni(){
+    try{ const r=await fetch(DATA+"universe.json?t="+Math.floor(Date.now()/36e5),{cache:"no-store"}); if(r.ok){ const u=await r.json(); if(u&&u.tickers) UNI=u; } }catch(e){}
+  }
+  /* Fetch price files for watchlist tickers that aren't in this week's data. */
+  async function loadPx(ts,force){
+    const need=ts.filter(t=>!(APP&&APP.prices&&APP.prices[t])&&(force||!PX[t]||Date.now()-PX[t]._at>30*60*1000));
+    if(!need.length) return;
+    await Promise.all(need.map(async t=>{
+      try{ const r=await fetch(DATA+"px/"+encodeURIComponent(t)+".json?t="+Math.floor(Date.now()/6e5),{cache:"no-store"}); if(r.ok){ const d=await r.json(); if(d&&Array.isArray(d.rows)){ d._at=Date.now(); PX[t]=d; delete MISS[t]; } } else if(r.status===404) MISS[t]=1; }catch(e){}
+    }));
+    push("prices");
+  }
   const newer=(a,b)=>!b?a:!a?b:((a.updated||"")>=(b.updated||"")?a:b);
   async function load(){
     try{
       const [a,h]=await Promise.all([getJSON("app.json"),getJSON("history.json")]);
-      if(a){ let x=a; try{ if(h) x=mergeHistory(x,h); }catch(e){} APP=x; lastOk=Date.now(); push(); return true; }
+      if(a){ let x=a; try{ if(h) x=mergeHistory(x,h); }catch(e){} APP=x; lastOk=Date.now(); push(); loadPx(wlGet(),true); if(!UNI) loadUni(); return true; }
     }catch(e){}
     return false;
   }
@@ -58,13 +72,16 @@
   function docRef(p){
     const m=/^watchlist\/([A-Z0-9.\-]{1,10})$/.exec(p);
     return {onSnapshot(cb){ const s={kind:"d",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(one(p)),0); return()=>{}; },get:async()=>one(p),
-      set:m?async()=>{ const a=wlGet(); if(!a.includes(m[1])){ a.push(m[1]); wlSet(a); } push("watchlist"); }:deny,
+      set:m?async()=>{ const a=wlGet(); if(!a.includes(m[1])){ a.push(m[1]); wlSet(a); } push("watchlist"); loadPx([m[1]]); }:deny,
       update:m?async()=>{}:deny,
       delete:m?async()=>{ wlSet(wlGet().filter(x=>x!==m[1])); push("watchlist"); }:deny};
   }
   const db={collection:q,doc:docRef};
   window.claude={use:async n=>n==="db"?db:n==="user"?{isOwner:()=>false,canEdit:()=>false,can:()=>false}:null};
-  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated};
+  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated,
+    /* true = we have data for this ticker, false = not a covered symbol, null = list not loaded yet */
+    lookup:t=>(APP&&APP.prices&&APP.prices[t])||PX[t]?true:MISS[t]?false:UNI?(UNI.tickers[t]?null:false):null,
+    nameOf:t=>(UNI&&UNI.tickers[t])||(PX[t]&&PX[t].name)||""};
   load(); setInterval(load,5*60*1000);
   document.addEventListener("visibilitychange",()=>{ if(!document.hidden) load(); });
 })();
@@ -222,10 +239,10 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 .row-actions{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
 
 /* fields */
-.field{display:grid;gap:6px}
+.field{display:grid;gap:6px;grid-template-columns:minmax(0,1fr)}.field>*{min-width:0}
 .field label{font-size:13px;font-weight:600;color:var(--ink-2)}
 .addrow{display:flex;gap:8px}
-.addrow input{flex:1;min-width:0;height:48px;border:1px solid var(--line-2);background:var(--bg);border-radius:var(--r-md);padding:0 14px;font-size:16px;text-transform:uppercase}
+.addrow input{flex:1;min-width:0;width:0;height:48px;border:1px solid var(--line-2);background:var(--bg);border-radius:var(--r-md);padding:0 14px;font-size:16px;text-transform:uppercase}
 .addrow input::placeholder{text-transform:none;color:var(--ink-3)}
 .addrow input:focus{outline:none;border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
 .addrow .btn{height:48px;border-radius:var(--r-md)}
@@ -430,6 +447,8 @@ body{font-size:15.5px;letter-spacing:0;font-feature-settings:"ss01","cv11"}
 .o-weak{background:var(--down-soft);color:var(--down)}
 .sk{grid-template-columns:40px 1fr 56px 58px;padding:0 16px}
 .sk .m{width:40px;height:40px;border-radius:50%}
+@media (max-width:400px){.srow.wl{grid-template-columns:40px minmax(0,1fr) auto 32px}.srow.wl .spark{display:none}}
+@media (max-width:360px){.srow{grid-template-columns:40px minmax(0,1fr) auto;gap:10px}.srow .spark{display:none}.srow.wl{grid-template-columns:40px minmax(0,1fr) auto 32px}.mono{width:36px;height:36px}}
 /* buttons: ink, colour reserved for data */
 .btn.primary{background:var(--btn);color:var(--on-btn)}
 .btn{background:var(--surface)}
@@ -715,6 +734,8 @@ function findPick(t){
   const sp=S.sig&&(S.sig.picks||[]).find(x=>x.t===t);
   return sp||null;
 }
+function nameOf(t){ const p=findPick(t); return (p&&p.name)||(S.prices[t]&&S.prices[t].name)||(PUB&&window.SS_PUBLIC.nameOf?window.SS_PUBLIC.nameOf(t):"")||""; }
+function techOf(t){ const pi=priceInfo(t); if(!pi) return null; try{ const ta=technical(pi.rows,fundOf(t)); return ta&&ta.score!=null?ta:null; }catch(e){ return null; } }
 function quoteOf(t){ const q=S.prices[t]&&S.prices[t].quote; return q&&isFinite(+q.price)?q:null; }
 function qHTML(t){ const q=quoteOf(t); if(!q) return ""; const ch=+q.changePct;
   return '<span class="qt">$'+(+q.price>=100?(+q.price).toFixed(2):(+q.price).toFixed(2))+(isFinite(ch)?' <span class="'+(ch>=0?"up":"dn")+'">'+(ch>=0?"▲":"▼")+Math.abs(ch).toFixed(1)+'%</span>':'')+'</span>'; }
@@ -725,11 +746,11 @@ function spark(t){
   const d=c.map((v,i)=>(i?"L":"M")+(2+(W-4)*i/(c.length-1)).toFixed(1)+" "+(3+(H-6)*(1-(v-lo)/((hi-lo)||1))).toFixed(1)).join("");
   return '<svg class="spark" viewBox="0 0 '+W+' '+H+'" aria-hidden="true"><path d="'+d+'" fill="none" stroke="var(--'+(up?"up":"down")+')" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>';
 }
-function metaLine(p){ const f=p.flags||[]; const bits=[];
+function metaLine(p,inWatch){ const f=p.flags||[]; const bits=[];
   if(f.includes("earnings")) bits.push('<span class="w">Earnings soon</span>');
   if(f.includes("acquired")) bits.push('<span class="w">Being bought</span>');
   if(f.includes("highrisk")) bits.push('<span class="r">Big swings</span>');
-  if(S.watch.includes(p.t)) bits.push('<span class="g">★ Watching</span>');
+  if(!inWatch&&S.watch.includes(p.t)) bits.push('<span class="g">★ Watching</span>');
   return bits.length?bits.join(" · "):({large:"Large company",mid:"Mid-size company",small:"Small company"}[p.cap]||band(p._v)[1]); }
 const mono=t=>'<span class="mono" aria-hidden="true">'+esc(String(t).replace(/[^A-Z0-9]/gi,"").slice(0,2))+'</span>';
 function rowHTML(p,extra,meta){
@@ -785,12 +806,16 @@ function renderWatch(){
   items.sort((a,b)=>(b.st.v??-1)-(a.st.v??-1)||a.t.localeCompare(b.t));
   const rm=t=>canWatch()?'<button class="rm" type="button" data-rm="'+esc(t)+'" aria-label="Remove '+esc(t)+' from watchlist">'+RM_ICON+'</button>':'';
   el.innerHTML=items.map(({t,st})=>{
-    if(st.p){ const p=Object.assign({},st.p,{_v:st.v}); return rowHTML(p,rm(t)||' '); }
+    if(st.p){ const p=Object.assign({},st.p,{_v:st.v}); return rowHTML(p,rm(t)||' ',metaLine(p,true)); }
+    const q=quoteOf(t), pi=priceInfo(t), ta=techOf(t), nm=nameOf(t), ch=q&&isFinite(+q.changePct)?+q.changePct:null;
+    const known=PUB&&window.SS_PUBLIC.lookup?window.SS_PUBLIC.lookup(t):null;
+    const tech=ta?'Tech <b class="num">'+ta.score+'</b>/100':'';
     const msg=st.pending!=null?'<span class="g">Scoring now'+(st.pending?' · '+st.pending+' min':'')+'</span> · usually 3–5 minutes'
       :st.err?'<span class="r">'+esc(st.err)+'</span>'
-      :PUB?'No odds yet · not on this week\'s lists':'Not scored yet · <button class="linkbtn" type="button" data-score="'+esc(t)+'" style="padding:0;min-height:0">Score now</button>';
-    const q=quoteOf(t);
-    return '<div class="srow wl" style="cursor:default">'+mono(t)+'<div class="sl"><b translate="no">'+esc(t)+'</b><span class="meta">'+msg+'</span></div>'+spark(t)+'<div class="sr">'+(q?'<span class="px">'+rhPrice(+q.price)+'</span>':'<span class="px muted">—</span>')+'</div>'+rm(t)+'</div>';
+      :PUB?(tech||(q||pi?'No odds yet':known===false?'<span class="w">No price data for this symbol</span>':'Loading price…'))
+      :(tech?tech+' · ':'')+'<button class="linkbtn" type="button" data-score="'+esc(t)+'" style="padding:0;min-height:0">Get odds</button>';
+    const open=pi||q;
+    return '<div class="srow wl"'+(open?' data-open="'+esc(t)+'" role="button" tabindex="0" aria-label="'+esc(t)+(nm?', '+esc(nm):'')+'"':' style="cursor:default"')+'>'+mono(t)+'<div class="sl"><b translate="no">'+esc(t)+'</b>'+(nm?'<span class="nm">'+esc(nm)+'</span>':'')+'<span class="meta">'+msg+'</span></div>'+spark(t)+'<div class="sr">'+(q?'<span class="px">'+rhPrice(+q.price)+'</span>'+(ch!=null?'<span class="px"><i class="'+(ch>=0?"up":"dn")+'">'+(ch>=0?"+":"−")+Math.abs(ch).toFixed(2)+'%</i></span>':''):'<span class="px muted">—</span>')+'</div>'+rm(t)+'</div>';
   }).join("");
 }
 setInterval(()=>{ if(S.watch.some(t=>wlState(t).pending!=null)) renderWatch(); },30000);
@@ -855,14 +880,14 @@ function renderPrice(t){
 try{ matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{ if(openT) renderPrice(openT); }); }catch(e){}
 const DOWN='<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>';
 function openSheet(t){
-  const p=findPick(t); if(!p) return;
+  const fp=findPick(t), lite=!fp, p=fp||(priceInfo(t)||quoteOf(t)?{t,name:nameOf(t),flags:[]}:null); if(!p) return;
   const wasOpen=!!openT&&$("sheet").classList.contains("on"), keep=wasOpen?$("sheet").scrollTop:0, taOpen=wasOpen&&openT===t&&$("shTA")&&!$("shTA").hidden;
   if(!wasOpen) lastFocus=document.activeElement;
   openT=t; if(RH.t!==t) RH={t,range:"1M"};
-  const v=prob(p,S.h), s=scoresOf(p), base=HZ[S.h].base, pi=priceInfo(t), ts=trendSource(t), fu=fundOf(t), ta=pi?technical(pi.rows,fu):null;
+  const v=lite?null:prob(p,S.h), s=scoresOf(p), base=HZ[S.h].base, pi=priceInfo(t), ts=trendSource(t), fu=fundOf(t), ta=pi?technical(pi.rows,fu):null;
   const watching=S.watch.includes(t), an=p.analyst||null;
   const barCol=x=>{ const b=band(x)[0]; return b==="weak"?"var(--down)":b==="flip"?"var(--ink-3)":"var(--up)"; };
-  const hz=Object.keys(HZ).map(h=>{ const x=prob(p,h); return '<div class="hzr'+(h===S.h?' on':'')+'"><span>'+HZ[h].short+'</span><span class="track" aria-hidden="true"><i style="width:'+x+'%;background:'+barCol(x)+'"></i><b style="left:'+HZ[h].base+'%"></b></span><b class="num">'+x+'%</b></div>'; }).join("");
+  const hz=lite?"":Object.keys(HZ).map(h=>{ const x=prob(p,h); return '<div class="hzr'+(h===S.h?' on':'')+'"><span>'+HZ[h].short+'</span><span class="track" aria-hidden="true"><i style="width:'+x+'%;background:'+barCol(x)+'"></i><b style="left:'+HZ[h].base+'%"></b></span><b class="num">'+x+'%</b></div>'; }).join("");
   const fc=FACT.map(([k,l])=>{ const val=Math.round(+s[k]||50), w=FWHAT[k][val>=65?2:val>=45?1:0]+(k==="momentum"&&ts==="file"?" · from your price file":k==="momentum"&&ts==="auto"?" · from daily prices":""); return '<div class="factor"><span class="t">'+l+'</span><span class="meter" aria-hidden="true"><i style="width:'+val+'%"></i></span><span class="v">'+val+'</span><span class="w">'+w+'</span></div>'; }).join("");
   const stats=[["P/E",fu.pe!=null?fu.pe.toFixed(1):"—"],["Forward P/E",fu.fpe!=null?fu.fpe.toFixed(1):"—"],["Size",({large:"Large",mid:"Mid",small:"Small"}[p.cap]||"—")],["52-week high",fu.hi!=null?rhPrice(fu.hi):"—"],["52-week low",fu.lo!=null?rhPrice(fu.lo):"—"],["Tech score",ta&&ta.score!=null?ta.score+"/100":"—"]];
   const tg=tags(p);
@@ -871,15 +896,16 @@ function openSheet(t){
     '<div class="sp-top"><button class="iconbtn" id="shClose" type="button" aria-label="Back to list"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><b id="shTitle" translate="no">'+esc(t)+'</b>'+
       (canWatch()&&db?'<button class="iconbtn" id="shStar" type="button" aria-pressed="'+watching+'" aria-label="'+(watching?"Remove from watchlist":"Add to watchlist")+'"><svg viewBox="0 0 24 24" aria-hidden="true" class="'+(watching?"on":"")+'"><path d="M12 4l2.4 5 5.6.6-4.2 3.8 1.2 5.6L12 16.2 7 19l1.2-5.6L4 9.6 9.6 9z"/></svg></button>':'<span></span>')+'</div>'+
     '<div class="pricebox"><div class="sp-name">'+esc(p.name||t)+'</div><div id="priceBox"></div></div>'+
+    (lite?'<section class="block" aria-labelledby="oddsH"><h3 id="oddsH">Chance it finishes higher</h3><p class="sub">'+esc(t)+' isn\'t on this week\'s lists, so it has no odds yet. '+(PUB?'Its chart and technical score below are from daily prices.':'Tap Get odds on your watchlist to score it.')+'</p></section>':
     '<section class="block" aria-labelledby="oddsH"><h3 id="oddsH">Chance it finishes higher</h3>'+
       '<div class="oddsbox">'+dial(v,96,9)+'<div class="lead">'+verdict(v)+'<p>'+v+'% after '+HZ[S.h].name+'. A typical stock: '+base+'%.</p></div></div>'+
-      '<div style="display:grid;gap:4px">'+hz+'</div>'+(tg?'<div class="tags">'+tg+'</div>':'')+'</section>'+
+      '<div style="display:grid;gap:4px">'+hz+'</div>'+(tg?'<div class="tags">'+tg+'</div>':'')+'</section>')+
     (an||(p.reasons&&p.reasons.length)?'<section class="block" aria-labelledby="flagH"><h3 id="flagH">Why it\'s a strong buy</h3>'+
       (an?'<div class="tags"><span class="tag g">'+esc(an.rating||"Buy")+'</span>'+(an.count?'<span class="tag">'+esc(an.count)+' analysts</span>':'')+(target?'<span class="tag">Target '+esc(target)+(an.upsidePct!=null?' ('+(+an.upsidePct>=0?"+":"−")+Math.abs(+an.upsidePct).toFixed(0)+'%)':'')+'</span>':'')+'</div>':'')+
       (p.reasons&&p.reasons.length?'<ul class="reasons">'+p.reasons.map(r=>'<li>'+esc(r)+'</li>').join("")+'</ul>':'')+'</section>':'')+
     '<section class="block" aria-labelledby="statsH"><h3 id="statsH">Key stats</h3><div class="stats">'+stats.map(([k,x])=>'<div><span>'+k+'</span><b>'+esc(x)+'</b></div>').join("")+'</div></section>'+
     (pi?'<div><button class="disclosure" id="shTAbtn" type="button" aria-expanded="false" aria-controls="shTA"><span class="l"><b>Technical analysis</b><span class="sub">'+(ta&&ta.score!=null?ta.score+'/100 · '+ta.verdict+' · '+ta.used+' of '+ta.total+' signals':'Needs more price history')+'</span></span>'+DOWN+'</button><div id="shTA" hidden></div></div>':'')+
-    '<section class="block" aria-labelledby="facH"><h3 id="facH">What drives the odds</h3><div>'+fc+'</div></section>'+
+    (lite?'':'<section class="block" aria-labelledby="facH"><h3 id="facH">What drives the odds</h3><div>'+fc+'</div></section>')+
     ((p.thesis||p.bear||p.catalyst||p.social)?'<section class="block" aria-labelledby="caseH"><h3 id="caseH">The case</h3><div class="case">'+
       (p.thesis?'<div class="bull"><h4>Why it could rise</h4><p>'+esc(p.thesis)+'</p></div>':'')+
       (p.bear?'<div class="bear"><h4>What could go wrong</h4><p>'+esc(p.bear)+'</p></div>':'')+
@@ -932,6 +958,7 @@ $("wlForm").addEventListener("submit",async e=>{
   e.preventDefault(); const inp=$("wlInput"), t=inp.value.trim().toUpperCase(); $("wlErr").textContent="";
   if(!/^[A-Z][A-Z0-9.\-]{0,9}$/.test(t)){ $("wlErr").textContent="Enter a ticker symbol, like AAPL or BRK.B."; inp.focus(); return; }
   if(!db){ $("wlErr").textContent="Sign in to Claude to save your watchlist."; return; }
+  if(PUB&&!findPick(t)&&window.SS_PUBLIC.lookup&&window.SS_PUBLIC.lookup(t)===false){ $("wlErr").textContent="Couldn't find "+t+". Signal Sheet covers US stocks worth $1 billion or more and major ETFs."; inp.focus(); return; }
   if(S.watch.includes(t)){ inp.value=""; inp.blur(); S.justAdded=t; setTimeout(showAdded,60); toast(t+" is already on your watchlist."); return; }
   try{ await db.doc("watchlist/"+t).set({ticker:t,added:new Date().toISOString()}); inp.value=""; inp.blur(); S.justAdded=t; setTimeout(showAdded,60);
     toast(t+" added to your watchlist."); }
@@ -1208,7 +1235,7 @@ $("copyApk").addEventListener("click",async()=>{
 function applyRole(){
   $("refreshBtn").hidden=!(S.owner||PUB); $("scanBtn").hidden=!S.owner;
   $("wlForm").hidden=!canWatch();
-  $("wlHelp").textContent=S.owner?"Add any ticker. New ones get researched and scored in a few minutes.":PUB?"Add any ticker. Your list stays on this phone and nobody else can see it. Stocks show odds when they're on this week's list or Strong buys.":"Watchlists aren't available in this view.";
+  $("wlHelp").textContent=S.owner?"Add any ticker. New ones get researched and scored in a few minutes.":PUB?"Add any US stock or ETF. You get its chart and technical score; odds show for stocks on this week's list or Strong buys. Your list stays on this phone.":"Watchlists aren't available in this view.";
   $("shareOwnerStep").hidden=!(S.owner||PUB);
   showView(location.hash.slice(1)||"today");
 }

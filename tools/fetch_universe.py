@@ -14,7 +14,8 @@ import json, pathlib, sys, time, datetime as dt
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from fetch_prices import get, num, NQ, valid, make_quote, KEEP  # noqa: E402
+from fetch_prices import get, num, NQ, valid, make_quote, nasdaq_regular, KEEP  # noqa: E402
+import re
 
 MIN_CAP = 1e9
 ETFS = {
@@ -42,6 +43,14 @@ ETFS = {
 }
 
 
+CUT = re.compile(r"\s+(Common Stock|Common Shares|Ordinary Shares|Class [A-Z]\b|American Depos|Depositary|Sponsored|Units|Unit\b|Warrant|\(The\)|New\b|\().*$", re.I)
+
+
+def clean_name(n):
+    n = CUT.sub("", re.sub(r"\s+", " ", n or "").strip()).strip(" ,-")
+    return n
+
+
 def screener():
     j = json.loads(get("https://api.nasdaq.com/api/screener/stocks?tableonly=true&download=true", NQ, timeout=60))
     rows = (j.get("data") or {}).get("rows") or []
@@ -53,8 +62,12 @@ def screener():
         except ValueError:
             cap = 0
         if sym and cap >= MIN_CAP and all(c.isalnum() or c in ".-" for c in sym):
-            name = (r.get("name") or sym).replace(" Common Stock", "").replace(" Class A Ordinary Shares", "").strip()
-            out[sym] = (name, cap)
+            name = clean_name(r.get("name") or sym) or sym
+            try:  # regular-session last price and change, used to add today's close before history catches up
+                last, chg = num(r.get("lastsale")), num(r.get("netchange"))
+            except ValueError:
+                last = chg = None
+            out[sym] = (name, cap, last, chg)
     return out
 
 
@@ -77,7 +90,7 @@ def history(t, etf):
     return None
 
 
-def one(t, name, etf, out, now):
+def one(t, name, etf, out, now, scr=None):
     for attempt in range(3):
         rows = history(t, etf)
         if rows:
@@ -88,7 +101,14 @@ def one(t, name, etf, out, now):
     why = valid(rows)
     if why:
         return t, why
-    quote, rows = make_quote(rows[-KEEP:], None, now)
+    live = None
+    if scr and scr[0] and scr[1] is not None:
+        # The screener's last sale is today's regular close only if last - change matches our last close.
+        if abs((scr[0] - scr[1]) / rows[-1][1] - 1) < 0.005 or abs(scr[0] / rows[-1][1] - 1) < 1e-9:
+            live = (scr[0], "Closed", "")
+    elif etf:
+        live = nasdaq_regular(t)
+    quote, rows = make_quote(rows[-KEEP:], live, now)
     doc = {"t": t, "name": name, "source": "Nasdaq", "rows": [[d, round(c, 4)] for d, c in rows[-KEEP:]], "quote": quote,
            "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
     (out / "px" / f"{t}.json").write_text(json.dumps(doc, separators=(",", ":")))
@@ -105,13 +125,13 @@ def main():
     if len(stocks) < 200:
         sys.exit("Screener returned too few stocks; not publishing.")
     items = sorted(stocks.items(), key=lambda kv: -kv[1][1])
-    jobs = [(t, n, True) for t, n in ETFS.items()] + [(t, n, False) for t, (n, _) in items if t not in ETFS]
+    jobs = [(t, n, True, None) for t, n in ETFS.items()] + [(t, v[0], False, v[2:]) for t, v in items if t not in ETFS]
     if limit:
         jobs = jobs[:limit]
     names, fails = {}, []
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=6) as ex:
-        futs = {ex.submit(one, t, n, e, out, now): (t, n) for t, n, e in jobs}
+        futs = {ex.submit(one, t, n, e, out, now, sc): (t, n) for t, n, e, sc in jobs}
         for i, f in enumerate(as_completed(futs), 1):
             t, n = futs[f]
             try:

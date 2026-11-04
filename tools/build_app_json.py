@@ -9,6 +9,11 @@ def docs(name):
     return {p.stem: json.loads(p.read_text()) for p in sorted(d.glob("*.json"))} if d.is_dir() else {}
 weeks = sorted(docs("weeks").values(), key=lambda w: w.get("weekOf", ""), reverse=True)[:8]
 sig = docs("signals").get("latest")
+# Picks that are only there because they're on the owner's watchlist are dropped too.
+private = lambda p: "watchlist" in (p.get("flags") or [])
+weeks = [dict(w, picks=[p for p in w.get("picks", []) if not private(p)]) for w in weeks]
+if sig:
+    sig = dict(sig, picks=[p for p in sig.get("picks", []) if not private(p)])
 # The owner's watchlist is private: never publish it, its scores, or prices for
 # tickers that appear only on it. Only stocks on the weekly list or Strong buys go out.
 public = {p.get("t") for w in weeks for p in w.get("picks", [])}

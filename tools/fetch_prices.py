@@ -4,7 +4,7 @@ Runs on GitHub Actions (see .github/workflows/prices.yml), which has normal inte
 Reads the ticker list from docs/data/app.json (this week's picks + Strong buys) and writes
 docs/data/history.json. The owner's private watchlist is never read or written here.
 
-History sources, tried in order per ticker: Yahoo Finance chart API, Stooq CSV, Nasdaq API.
+History sources, tried in order per ticker: Nasdaq API, Yahoo Finance chart API, Stooq CSV.
 Each result is checked before it is kept: at least 20 daily closes, the newest within
 10 days, and no zero or negative prices. A ticker that fails keeps its previous data.
 
@@ -76,7 +76,7 @@ def nasdaq(t):
     raise RuntimeError("nasdaq: no rows")
 
 
-SOURCES = [("Yahoo Finance", yahoo), ("Stooq", stooq), ("Nasdaq", nasdaq)]
+SOURCES = [("Nasdaq", nasdaq), ("Yahoo Finance", yahoo), ("Stooq", stooq)]  # Nasdaq first: the others block GitHub runners
 
 
 def valid(rows):

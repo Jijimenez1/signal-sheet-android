@@ -8,7 +8,9 @@ shim = r"""<script>
 /* Public data source: data/app.json on GitHub Pages, refreshed every 5 minutes. Read-only, except
    the watchlist, which lives only in this phone's storage (never sent anywhere). */
 (function(){
-  let APP=null, lastOk=null; const subs=[], WL_KEY="ss_watchlist_v1";
+  let APP=null, lastOk=null, UNI=null; const subs=[], WL_KEY="ss_watchlist_v1", PX={}, MISS={};
+  /* Daily price files for any popular US stock or ETF (built each evening by universe.yml) */
+  const DATA="https://raw.githubusercontent.com/Jijimenez1/signal-sheet-android/data/";
   const wlGet=()=>{ try{ const v=JSON.parse(localStorage.getItem(WL_KEY)||"[]"); return Array.isArray(v)?v.filter(x=>typeof x==="string"):[]; }catch(e){ return []; } };
   const wlSet=a=>{ try{ localStorage.setItem(WL_KEY,JSON.stringify(a)); }catch(e){} };
   const docsOf=(arr)=>({metadata:{fromCache:false,hasPendingWrites:false},docs:arr,size:arr.length,empty:!arr.length,docChanges:()=>[]});
@@ -17,7 +19,7 @@ shim = r"""<script>
     if(p==="watchlist") return wlGet().map(t=>D(t,{ticker:t}));
     if(!APP) return [];
     if(p==="weeks") return (APP.weeks||[]).slice().sort((a,b)=>b.weekOf<a.weekOf?-1:1).map(w=>D(w.weekOf,w));
-    if(p==="prices") return Object.keys(APP.prices||{}).map(k=>D(k,APP.prices[k]));
+    if(p==="prices"){ const m=Object.assign({},PX,APP.prices||{}); for(const k in PX){ if(m[k]!==PX[k]&&!m[k].name) m[k]=Object.assign({},m[k],{name:PX[k].name}); } return Object.keys(m).map(k=>D(k,m[k])); }
     return [];
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
@@ -45,11 +47,23 @@ shim = r"""<script>
     }
     return null;
   }
+  async function loadUni(){
+    try{ const r=await fetch(DATA+"universe.json?t="+Math.floor(Date.now()/36e5),{cache:"no-store"}); if(r.ok){ const u=await r.json(); if(u&&u.tickers) UNI=u; } }catch(e){}
+  }
+  /* Fetch price files for watchlist tickers that aren't in this week's data. */
+  async function loadPx(ts,force){
+    const need=ts.filter(t=>!(APP&&APP.prices&&APP.prices[t])&&(force||!PX[t]||Date.now()-PX[t]._at>30*60*1000));
+    if(!need.length) return;
+    await Promise.all(need.map(async t=>{
+      try{ const r=await fetch(DATA+"px/"+encodeURIComponent(t)+".json?t="+Math.floor(Date.now()/6e5),{cache:"no-store"}); if(r.ok){ const d=await r.json(); if(d&&Array.isArray(d.rows)){ d._at=Date.now(); PX[t]=d; delete MISS[t]; } } else if(r.status===404) MISS[t]=1; }catch(e){}
+    }));
+    push("prices");
+  }
   const newer=(a,b)=>!b?a:!a?b:((a.updated||"")>=(b.updated||"")?a:b);
   async function load(){
     try{
       const [a,h]=await Promise.all([getJSON("app.json"),getJSON("history.json")]);
-      if(a){ let x=a; try{ if(h) x=mergeHistory(x,h); }catch(e){} APP=x; lastOk=Date.now(); push(); return true; }
+      if(a){ let x=a; try{ if(h) x=mergeHistory(x,h); }catch(e){} APP=x; lastOk=Date.now(); push(); loadPx(wlGet(),true); if(!UNI) loadUni(); return true; }
     }catch(e){}
     return false;
   }
@@ -59,13 +73,16 @@ shim = r"""<script>
   function docRef(p){
     const m=/^watchlist\/([A-Z0-9.\-]{1,10})$/.exec(p);
     return {onSnapshot(cb){ const s={kind:"d",p,cb}; subs.push(s); if(APP) setTimeout(()=>cb(one(p)),0); return()=>{}; },get:async()=>one(p),
-      set:m?async()=>{ const a=wlGet(); if(!a.includes(m[1])){ a.push(m[1]); wlSet(a); } push("watchlist"); }:deny,
+      set:m?async()=>{ const a=wlGet(); if(!a.includes(m[1])){ a.push(m[1]); wlSet(a); } push("watchlist"); loadPx([m[1]]); }:deny,
       update:m?async()=>{}:deny,
       delete:m?async()=>{ wlSet(wlGet().filter(x=>x!==m[1])); push("watchlist"); }:deny};
   }
   const db={collection:q,doc:docRef};
   window.claude={use:async n=>n==="db"?db:n==="user"?{isOwner:()=>false,canEdit:()=>false,can:()=>false}:null};
-  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated};
+  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated,
+    /* true = we have data for this ticker, false = not a covered symbol, null = list not loaded yet */
+    lookup:t=>(APP&&APP.prices&&APP.prices[t])||PX[t]?true:MISS[t]?false:UNI?(UNI.tickers[t]?null:false):null,
+    nameOf:t=>(UNI&&UNI.tickers[t])||(PX[t]&&PX[t].name)||""};
   load(); setInterval(load,5*60*1000);
   document.addEventListener("visibilitychange",()=>{ if(!document.hidden) load(); });
 })();
