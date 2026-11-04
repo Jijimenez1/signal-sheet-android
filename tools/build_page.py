@@ -36,10 +36,20 @@ shim = r"""<script>
     app.updated=[app.updated,h.updated].filter(Boolean).sort().pop();
     return app;
   }
+  /* Data is read straight from the repo (updates within ~5 minutes of every commit, even when
+     GitHub Pages deploys are queued), falling back to this site's own copy. */
+  const RAW="https://raw.githubusercontent.com/Jijimenez1/signal-sheet-android/main/docs/data/";
+  async function getJSON(name){
+    for(const base of [RAW,"data/"]){
+      try{ const r=await fetch(base+name+"?t="+Date.now(),{cache:"no-store"}); if(r.ok) return await r.json(); }catch(e){}
+    }
+    return null;
+  }
+  const newer=(a,b)=>!b?a:!a?b:((a.updated||"")>=(b.updated||"")?a:b);
   async function load(){
     try{
-      const [r,h]=await Promise.all([fetch("data/app.json?t="+Date.now(),{cache:"no-store"}),fetch("data/history.json?t="+Date.now(),{cache:"no-store"}).catch(()=>null)]);
-      if(r.ok){ let a=await r.json(); try{ if(h&&h.ok) a=mergeHistory(a,await h.json()); }catch(e){} APP=a; lastOk=Date.now(); push(); return true; }
+      const [a,h]=await Promise.all([getJSON("app.json"),getJSON("history.json")]);
+      if(a){ let x=a; try{ if(h) x=mergeHistory(x,h); }catch(e){} APP=x; lastOk=Date.now(); push(); return true; }
     }catch(e){}
     return false;
   }
