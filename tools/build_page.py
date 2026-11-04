@@ -42,6 +42,8 @@ shim = r"""<script>
 </script>
 """
 page = src
+# serve the TradingView chart library from this site (vendored, Apache-2.0, see docs/vendor/)
+page = page.replace("https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js", "vendor/lightweight-charts-4.1.3.standalone.js")
 # public wording
 page = page.replace('<li>They need a free Claude account to sign in.</li>', '<li>No account or sign-in needed. It opens straight to the picks.</li>')
 import re
