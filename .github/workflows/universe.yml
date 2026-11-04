@@ -1,0 +1,45 @@
+name: Update stock universe
+
+# Daily price files for every US stock over $1B plus major ETFs, published to the orphan
+# "data" branch (force-pushed each run, so the repo never grows). 6:40 PM New York time.
+on:
+  schedule:
+    - cron: "40 22 * * 1-5"
+    - cron: "40 23 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: "Only fetch this many tickers (0 = all)"
+        default: "0"
+  push:
+    branches: [main]
+    paths: [".github/workflows/universe.yml", "tools/fetch_universe.py"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: universe
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Fetch universe
+        run: python3 tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}"
+      - name: Publish data branch
+        run: |
+          cd "$RUNNER_TEMP/u"
+          git init -q -b data
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "Daily prices $(date -u +%F)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" data:data
+          echo "published $(ls px | wc -l) price files"
