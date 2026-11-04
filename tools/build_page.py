@@ -22,7 +22,27 @@ shim = r"""<script>
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
   function push(only){ subs.forEach(s=>{ if(only&&s.p!==only) return; try{ s.kind==="c"?s.cb(docsOf(coll(s.p))):s.cb(one(s.p)); }catch(e){} }); }
-  async function load(){ try{ const r=await fetch("data/app.json?t="+Date.now(),{cache:"no-store"}); if(r.ok){ APP=await r.json(); lastOk=Date.now(); push(); return true; } }catch(e){} return false; }
+  /* Price history from the GitHub price feed (data/history.json) is merged over app.json:
+     rows are combined by date, and the feed's quote wins except for fields it lacks (P/E). */
+  function mergeHistory(app,h){
+    if(!h||!h.tickers) return app;
+    app.prices=app.prices||{};
+    for(const t in h.tickers){
+      const x=h.tickers[t], cur=app.prices[t]||{t,rows:[]}, m={};
+      (cur.rows||[]).forEach(r=>{ m[r[0]]=r[1]; }); (x.rows||[]).forEach(r=>{ m[r[0]]=r[1]; });
+      const rows=Object.keys(m).sort().slice(-300).map(d=>[d,m[d]]);
+      app.prices[t]=Object.assign({},cur,{t,rows,source:x.source||cur.source,quote:Object.assign({},cur.quote||{},x.quote||{})});
+    }
+    app.updated=[app.updated,h.updated].filter(Boolean).sort().pop();
+    return app;
+  }
+  async function load(){
+    try{
+      const [r,h]=await Promise.all([fetch("data/app.json?t="+Date.now(),{cache:"no-store"}),fetch("data/history.json?t="+Date.now(),{cache:"no-store"}).catch(()=>null)]);
+      if(r.ok){ let a=await r.json(); try{ if(h&&h.ok) a=mergeHistory(a,await h.json()); }catch(e){} APP=a; lastOk=Date.now(); push(); return true; }
+    }catch(e){}
+    return false;
+  }
   const ready=p=>p==="watchlist"||APP;
   const q=p=>({orderBy(){return this},limit(){return this},where(){return this},onSnapshot(cb){ const s={kind:"c",p,cb}; subs.push(s); if(ready(p)) setTimeout(()=>cb(docsOf(coll(p))),0); return()=>{}; },get:async()=>docsOf(coll(p))});
   const deny=async()=>{ throw {code:"invalid_argument",message:"read-only"}; };

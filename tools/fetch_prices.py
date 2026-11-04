@@ -58,17 +58,34 @@ def stooq(t):
     return sorted(rows.items()), None, None, {}
 
 
+NQ = {"Accept": "application/json", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
+num = lambda x: float(str(x).replace("$", "").replace(",", "").replace("%", "").replace("+", "").strip())
+
+
 def nasdaq(t):
     start = (dt.date.today() - dt.timedelta(days=430)).isoformat()
-    j = json.loads(get(f"https://api.nasdaq.com/api/quote/{t}/historical?assetclass=stocks&fromdate={start}&limit=9999",
-                       {"Accept": "application/json", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}))
-    rows = {}
-    for r in (j.get("data") or {}).get("tradesTable", {}).get("rows", []) or []:
-        m, d, y = r["date"].split("/")
-        rows[f"{y}-{m}-{d}"] = round(float(r["close"].replace("$", "").replace(",", "")), 4)
-    if not rows:
-        raise RuntimeError("nasdaq: no rows")
-    return sorted(rows.items()), None, None, {}
+    for cls in ("stocks", "etf"):
+        j = json.loads(get(f"https://api.nasdaq.com/api/quote/{t}/historical?assetclass={cls}&fromdate={start}&limit=9999", NQ))
+        rows = {}
+        for r in ((j.get("data") or {}).get("tradesTable") or {}).get("rows") or []:
+            m, d, y = r["date"].split("/")
+            rows[f"{y}-{m}-{d}"] = round(num(r["close"]), 4)
+        if rows:
+            return sorted(rows.items()), None, None, {}
+    raise RuntimeError("nasdaq: no rows")
+
+
+def nasdaq_live(t):
+    """Latest trade (intraday during market hours) from Nasdaq's quote endpoint."""
+    for cls in ("stocks", "etf"):
+        try:
+            j = json.loads(get(f"https://api.nasdaq.com/api/quote/{t}/info?assetclass={cls}", NQ))
+            pd = (j.get("data") or {}).get("primaryData") or {}
+            if pd.get("lastSalePrice"):
+                return num(pd["lastSalePrice"]), num(pd.get("percentageChange") or 0), (pd.get("lastTradeTimestamp") or "").replace("DATA AS OF ", "").strip()
+        except Exception:
+            pass
+    return None
 
 
 SOURCES = [("Yahoo Finance", yahoo), ("Stooq", stooq), ("Nasdaq", nasdaq)]
@@ -115,6 +132,7 @@ def main():
             continue
         name, rows, price, when, extra = got
         rows = rows[-KEEP:]
+        live = nasdaq_live(t) if not price else None
         last = rows[-1][1]
         prev = rows[-2][1] if len(rows) > 1 else last
         px = float(price) if price else last
@@ -122,13 +140,16 @@ def main():
         quote = {
             "price": round(px, 4),
             "changePct": round((px / prev - 1) * 100, 4),  # vs the previous trading day's close
-            "asOf": (asof.strftime("%b %-d, %H:%M UTC") if asof else rows[-1][0]),
+            "asOf": (asof.strftime("%b %-d, %H:%M UTC") if asof else dt.date.fromisoformat(rows[-1][0]).strftime("%b %-d") + " close"),
             "source": name,
         }
-        if "fiftyTwoWeekHigh" in extra: quote["high52"] = extra["fiftyTwoWeekHigh"]
-        if "fiftyTwoWeekLow" in extra: quote["low52"] = extra["fiftyTwoWeekLow"]
+        if live and live[0] > 0 and abs(live[0] / last - 1) < 0.35:  # sanity check against the last close
+            quote.update(price=round(live[0], 4), changePct=round(live[1], 4), asOf=live[2] or quote["asOf"], source="Nasdaq")
+        yr = [c for _, c in rows[-252:]] + [quote["price"]]
+        quote["high52"] = extra.get("fiftyTwoWeekHigh") or round(max(yr), 4)
+        quote["low52"] = extra.get("fiftyTwoWeekLow") or round(min(yr), 4)
         out[t] = {"t": t, "source": name, "rows": [[d, c] for d, c in rows], "quote": quote, "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
-        report.append(f"{t}: {name}, {len(rows)} days through {rows[-1][0]}, last {px:.2f}")
+        report.append(f"{t}: {name}, {len(rows)} days through {rows[-1][0]}, quote {quote['price']:.2f} ({quote['asOf']})")
         time.sleep(0.4)
     if not out:
         print("\n".join(report)); sys.exit("No prices fetched from any source; leaving history.json unchanged.")
