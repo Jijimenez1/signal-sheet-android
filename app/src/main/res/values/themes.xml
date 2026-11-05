@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.SignalSheet" parent="android:Theme.Material.Light.NoActionBar">
-        <item name="android:statusBarColor">#F5F6F4</item>
-        <item name="android:navigationBarColor">#F5F6F4</item>
+        <item name="android:statusBarColor">#E9EBEE</item>
+        <item name="android:navigationBarColor">#E9EBEE</item>
         <item name="android:windowLightStatusBar">true</item>
         <item name="android:windowBackground">@color/porcelain</item>
     </style>

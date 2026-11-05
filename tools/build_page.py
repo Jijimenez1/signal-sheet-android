@@ -98,7 +98,7 @@ page = re.sub(r'<li id="shareOwnerStep">.*?</li>', '<li id="shareOwnerStep">Each
 page = page.replace('<p>iPhone users: open the Signal Sheet link in Safari, tap Share, then Add to Home Screen.</p>', '<p>iPhone users: open <b>jijimenez1.github.io/signal-sheet-android</b> in Safari, tap Share, then Add to Home Screen.</p>')
 head = """<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0A0B0C" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#F5F6F4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141518" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#E9EBEE" media="(prefers-color-scheme: light)">
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 </head><body>"""

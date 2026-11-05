@@ -1,6 +1,6 @@
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#0A0B0C" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#F5F6F4" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#141518" media="(prefers-color-scheme: dark)"><meta name="theme-color" content="#E9EBEE" media="(prefers-color-scheme: light)">
 <link rel="manifest" href="manifest.webmanifest"><link rel="icon" href="icon.svg">
 <style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 </head><body><script>
@@ -99,10 +99,10 @@
 /* Premium palette: porcelain + graphite neutrals (slightly green-cool), jade for gains, coral for losses.
    Colour stays on data; chrome is ink and neutrals. Display face: Instrument Serif. UI face: Instrument Sans. */
 :root{
-  --bg:#F5F6F4; --card:#FFFFFF; --surface:#EDEFEC; --surface-2:#E3E6E3; --ink:#0F1412; --ink-2:#56605B; --ink-3:#8A928E;
-  --line:#E4E7E4; --line-2:#CED3D0;
+  --bg:#E9EBEE; --card:#FFFFFF; --surface:#E1E4E8; --surface-2:#D4D8DD; --ink:#111316; --ink-2:#545A62; --ink-3:#787E87;
+  --line:#DCDFE3; --line-2:#C3C8CE; --elev:0 1px 2px rgba(17,19,22,.05),0 4px 14px rgba(17,19,22,.05);
   --up:#0B946A; --up-soft:#DFF3EA; --down:#E0464B; --down-soft:#FCE8E8; --warn:#A86500; --warn-soft:#FFF1D9;
-  --on-up:#FFFFFF; --focus:#2F6BFF; --btn:#0F1412; --on-btn:#FFFFFF;
+  --on-up:#FFFFFF; --focus:#2F6BFF; --btn:#111316; --on-btn:#FFFFFF;
   --f:"Instrument Sans", "Helvetica Neue", Roboto, system-ui, -apple-system, sans-serif;
   --f-serif:"Instrument Serif", "Iowan Old Style", Georgia, "Times New Roman", serif;
   --r-sm:8px; --r-md:12px; --r-lg:20px;
@@ -113,15 +113,15 @@
   --brand:var(--up); --outline:var(--line-2);
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
-  --bg:#0A0B0C; --card:#141617; --surface:#1B1D1F; --surface-2:#25282A; --ink:#F1F3F1; --ink-2:#9CA39F; --ink-3:#6C736F;
-  --line:#212425; --line-2:#33373A;
+  --bg:#141518; --card:#1F2125; --surface:#282B30; --surface-2:#32363C; --ink:#F2F3F5; --ink-2:#A4A9B0; --ink-3:#777D85;
+  --line:#2C2F34; --line-2:#3D4148; --elev:0 1px 0 rgba(255,255,255,.03) inset,0 4px 14px rgba(0,0,0,.25);
   --up:#3DD89A; --up-soft:#0F2A1F; --down:#FF6B63; --down-soft:#2D1516; --warn:#F2B455; --warn-soft:#2A2010;
-  --on-up:#03140C; --focus:#6E9BFF; --btn:#F1F3F1; --on-btn:#0A0B0C; color-scheme:dark}}
+  --on-up:#03140C; --focus:#6E9BFF; --btn:#F2F3F5; --on-btn:#141518; color-scheme:dark}}
 :root[data-theme="dark"]{
-  --bg:#0A0B0C; --card:#141617; --surface:#1B1D1F; --surface-2:#25282A; --ink:#F1F3F1; --ink-2:#9CA39F; --ink-3:#6C736F;
-  --line:#212425; --line-2:#33373A;
+  --bg:#141518; --card:#1F2125; --surface:#282B30; --surface-2:#32363C; --ink:#F2F3F5; --ink-2:#A4A9B0; --ink-3:#777D85;
+  --line:#2C2F34; --line-2:#3D4148; --elev:0 1px 0 rgba(255,255,255,.03) inset,0 4px 14px rgba(0,0,0,.25);
   --up:#3DD89A; --up-soft:#0F2A1F; --down:#FF6B63; --down-soft:#2D1516; --warn:#F2B455; --warn-soft:#2A2010;
-  --on-up:#03140C; --focus:#6E9BFF; --btn:#F1F3F1; --on-btn:#0A0B0C; color-scheme:dark}
+  --on-up:#03140C; --focus:#6E9BFF; --btn:#F2F3F5; --on-btn:#141518; color-scheme:dark}
 
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -488,6 +488,9 @@ details.paste summary{color:var(--ink)}
 .tagroup,.stat,.blk.plain{background:var(--surface)}
 .verdict{border-radius:999px}
 .tag{border-radius:999px;padding:3px 10px;background:var(--surface)}
+/* Grey scheme: white/graphite cards float on the grey page */
+.card,.list,#v-more .sect,.block,.disclosure,.search{box-shadow:var(--elev)}
+.search{box-shadow:var(--elev),inset 0 0 0 1px var(--line)}
 </style>
 
 <a class="skip" href="#main">Skip to content</a>
