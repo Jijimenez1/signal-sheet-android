@@ -19,7 +19,9 @@ shim = r"""<script>
     if(p==="watchlist") return wlGet().map(t=>D(t,{ticker:t}));
     if(!APP) return [];
     if(p==="weeks") return (APP.weeks||[]).slice().sort((a,b)=>b.weekOf<a.weekOf?-1:1).map(w=>D(w.weekOf,w));
-    if(p==="prices"){ const m=Object.assign({},PX,APP.prices||{}); for(const k in PX){ if(m[k]!==PX[k]&&!m[k].name) m[k]=Object.assign({},m[k],{name:PX[k].name}); } return Object.keys(m).map(k=>D(k,m[k])); }
+    if(p==="prices"){ const m=Object.assign({},PX,APP.prices||{}); for(const k in PX){ if(m[k]!==PX[k]&&!m[k].name) m[k]=Object.assign({},m[k],{name:PX[k].name}); }
+      for(const k in LONG){ if(m[k]&&LONG[k]) m[k]=Object.assign({},m[k],{long:LONG[k]}); }
+      return Object.keys(m).map(k=>D(k,m[k])); }
     return [];
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
@@ -34,6 +36,7 @@ shim = r"""<script>
       (cur.rows||[]).forEach(r=>{ m[r[0]]=r[1]; }); (x.rows||[]).forEach(r=>{ m[r[0]]=r[1]; });
       const rows=Object.keys(m).sort().slice(-300).map(d=>[d,m[d]]);
       app.prices[t]=Object.assign({},cur,{t,rows,source:x.source||cur.source,quote:Object.assign({},cur.quote||{},x.quote||{})});
+      if(x.hlv) app.prices[t].hlv=x.hlv; if(x.short) app.prices[t].short=x.short;
     }
     app.updated=[app.updated,h.updated].filter(Boolean).sort().pop();
     return app;
@@ -46,6 +49,19 @@ shim = r"""<script>
       try{ const r=await fetch(base+name+"?t="+Date.now(),{cache:"no-store"}); if(r.ok) return await r.json(); }catch(e){}
     }
     return null;
+  }
+  /* All-time history, fetched the first time someone taps 5Y or All on a stock:
+     this week's stocks come from long.json, everything else from the weekly "long" branch. */
+  const LONG={}, LONGB="https://raw.githubusercontent.com/Jijimenez1/signal-sheet-android/long/long/"; let LONGALL=null;
+  async function loadLong(t){
+    if(LONG[t]) return true;
+    try{
+      if(!LONGALL){ const j=await getJSON("long.json"); if(j&&j.tickers) LONGALL=j.tickers; }
+      let rows=LONGALL&&LONGALL[t]&&LONGALL[t].rows;
+      if(!rows){ const r=await fetch(LONGB+encodeURIComponent(t)+".json?t="+Math.floor(Date.now()/864e5),{cache:"no-store"}); if(r.ok){ const d=await r.json(); rows=d&&d.rows; } }
+      if(Array.isArray(rows)&&rows.length>1){ LONG[t]=rows; push("prices"); return true; }
+    }catch(e){}
+    return false;
   }
   async function loadUni(){
     try{ const r=await fetch(DATA+"universe.json?t="+Math.floor(Date.now()/36e5),{cache:"no-store"}); if(r.ok){ const u=await r.json(); if(u&&u.tickers) UNI=u; } }catch(e){}
@@ -79,7 +95,7 @@ shim = r"""<script>
   }
   const db={collection:q,doc:docRef};
   window.claude={use:async n=>n==="db"?db:n==="user"?{isOwner:()=>false,canEdit:()=>false,can:()=>false}:null};
-  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated,
+  window.SS_PUBLIC={reload:load,loadLong,updated:()=>APP&&APP.updated,
     /* true = we have data for this ticker, false = not a covered symbol, null = list not loaded yet */
     lookup:t=>(APP&&APP.prices&&APP.prices[t])||PX[t]?true:MISS[t]?false:UNI?(UNI.tickers[t]?null:false):null,
     nameOf:t=>(UNI&&UNI.tickers[t])||(PX[t]&&PX[t].name)||""};

@@ -7,6 +7,11 @@ on:
   schedule:
     - cron: "40 23 * * 1-5"
     - cron: "10 3 * * 2-6"
+  # GitHub's timer often runs hours late, so also piggyback on the price feed: the first
+  # price run after 4:15 PM New York time starts this job if today's data isn't out yet.
+  workflow_run:
+    workflows: ["Update prices"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       limit:
@@ -29,12 +34,28 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Is today's data already out?
+        id: gate
+        run: |
+          if [ "${{ github.event_name }}" != "workflow_run" ]; then echo "go=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          git fetch -q --depth 1 origin data && LAST=$(git log -1 --format=%ct FETCH_HEAD) || LAST=0
+          python3 - "$LAST" >> "$GITHUB_OUTPUT" <<'PY'
+          import sys, datetime as dt
+          from zoneinfo import ZoneInfo
+          ny = ZoneInfo("America/New_York"); now = dt.datetime.now(ny)
+          cut = now.replace(hour=16, minute=15, second=0, microsecond=0)
+          last = dt.datetime.fromtimestamp(int(sys.argv[1]), ny)
+          print("go=1" if now.weekday() < 5 and now >= cut and last < cut else "go=0")
+          PY
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == '1'
         with:
           python-version: "3.12"
       - name: Fetch universe
+        if: steps.gate.outputs.go == '1'
         run: python3 tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}"
       - name: Publish data branch
+        if: steps.gate.outputs.go == '1'
         run: |
           cd "$RUNNER_TEMP/u"
           git init -q -b data

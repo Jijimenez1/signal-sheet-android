@@ -18,7 +18,9 @@
     if(p==="watchlist") return wlGet().map(t=>D(t,{ticker:t}));
     if(!APP) return [];
     if(p==="weeks") return (APP.weeks||[]).slice().sort((a,b)=>b.weekOf<a.weekOf?-1:1).map(w=>D(w.weekOf,w));
-    if(p==="prices"){ const m=Object.assign({},PX,APP.prices||{}); for(const k in PX){ if(m[k]!==PX[k]&&!m[k].name) m[k]=Object.assign({},m[k],{name:PX[k].name}); } return Object.keys(m).map(k=>D(k,m[k])); }
+    if(p==="prices"){ const m=Object.assign({},PX,APP.prices||{}); for(const k in PX){ if(m[k]!==PX[k]&&!m[k].name) m[k]=Object.assign({},m[k],{name:PX[k].name}); }
+      for(const k in LONG){ if(m[k]&&LONG[k]) m[k]=Object.assign({},m[k],{long:LONG[k]}); }
+      return Object.keys(m).map(k=>D(k,m[k])); }
     return [];
   }
   function one(p){ if(APP&&p==="signals/latest"&&APP.signals) return D("latest",APP.signals); return {id:p.split("/").pop(),exists:false,data:()=>undefined,metadata:{fromCache:false}}; }
@@ -33,6 +35,7 @@
       (cur.rows||[]).forEach(r=>{ m[r[0]]=r[1]; }); (x.rows||[]).forEach(r=>{ m[r[0]]=r[1]; });
       const rows=Object.keys(m).sort().slice(-300).map(d=>[d,m[d]]);
       app.prices[t]=Object.assign({},cur,{t,rows,source:x.source||cur.source,quote:Object.assign({},cur.quote||{},x.quote||{})});
+      if(x.hlv) app.prices[t].hlv=x.hlv; if(x.short) app.prices[t].short=x.short;
     }
     app.updated=[app.updated,h.updated].filter(Boolean).sort().pop();
     return app;
@@ -45,6 +48,19 @@
       try{ const r=await fetch(base+name+"?t="+Date.now(),{cache:"no-store"}); if(r.ok) return await r.json(); }catch(e){}
     }
     return null;
+  }
+  /* All-time history, fetched the first time someone taps 5Y or All on a stock:
+     this week's stocks come from long.json, everything else from the weekly "long" branch. */
+  const LONG={}, LONGB="https://raw.githubusercontent.com/Jijimenez1/signal-sheet-android/long/long/"; let LONGALL=null;
+  async function loadLong(t){
+    if(LONG[t]) return true;
+    try{
+      if(!LONGALL){ const j=await getJSON("long.json"); if(j&&j.tickers) LONGALL=j.tickers; }
+      let rows=LONGALL&&LONGALL[t]&&LONGALL[t].rows;
+      if(!rows){ const r=await fetch(LONGB+encodeURIComponent(t)+".json?t="+Math.floor(Date.now()/864e5),{cache:"no-store"}); if(r.ok){ const d=await r.json(); rows=d&&d.rows; } }
+      if(Array.isArray(rows)&&rows.length>1){ LONG[t]=rows; push("prices"); return true; }
+    }catch(e){}
+    return false;
   }
   async function loadUni(){
     try{ const r=await fetch(DATA+"universe.json?t="+Math.floor(Date.now()/36e5),{cache:"no-store"}); if(r.ok){ const u=await r.json(); if(u&&u.tickers) UNI=u; } }catch(e){}
@@ -78,7 +94,7 @@
   }
   const db={collection:q,doc:docRef};
   window.claude={use:async n=>n==="db"?db:n==="user"?{isOwner:()=>false,canEdit:()=>false,can:()=>false}:null};
-  window.SS_PUBLIC={reload:load,updated:()=>APP&&APP.updated,
+  window.SS_PUBLIC={reload:load,loadLong,updated:()=>APP&&APP.updated,
     /* true = we have data for this ticker, false = not a covered symbol, null = list not loaded yet */
     lookup:t=>(APP&&APP.prices&&APP.prices[t])||PX[t]?true:MISS[t]?false:UNI?(UNI.tickers[t]?null:false):null,
     nameOf:t=>(UNI&&UNI.tickers[t])||(PX[t]&&PX[t].name)||""};
@@ -109,19 +125,27 @@
   --gutter:max(16px, env(safe-area-inset-left,0px));
   --gutter-r:max(16px, env(safe-area-inset-right,0px));
   /* aliases used by the odds dial and the technical-analysis charts */
-  --fog:var(--surface-2); --strong:var(--up); --lean:var(--up); --flip:var(--ink-3); --weak:var(--down);
+  --fog:var(--surface-2); --strong:var(--up); --lean:#E3AE00; --flip:#F2740D; --weak:var(--down);
+  /* four-step scale: green strong, yellow leaning up, orange coin flip, red weak */
+  --lean-bg:#FFD43B; --lean-ink:#3A2E00; --lean-soft:#FFF3BF; --lean-text:#6B5300;
+  --flip-bg:#FF922B; --flip-ink:#3A1A00; --flip-soft:#FFE4CC; --flip-text:#8A3F00;
+  --weak-bg:#D93A40; --weak-ink:#FFFFFF;
   --brand:var(--up); --outline:var(--line-2);
 }
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]){
   --bg:#141518; --card:#1F2125; --surface:#282B30; --surface-2:#32363C; --ink:#F2F3F5; --ink-2:#A4A9B0; --ink-3:#777D85;
   --line:#2C2F34; --line-2:#3D4148; --elev:0 1px 0 rgba(255,255,255,.03) inset,0 4px 14px rgba(0,0,0,.25);
   --up:#3DD89A; --up-soft:#0F2A1F; --down:#FF6B63; --down-soft:#2D1516; --warn:#F2B455; --warn-soft:#2A2010;
-  --on-up:#03140C; --focus:#6E9BFF; --btn:#F2F3F5; --on-btn:#141518; color-scheme:dark}}
+  --on-up:#03140C; --focus:#6E9BFF; --btn:#F2F3F5; --on-btn:#141518;
+  --lean:#FACC15; --flip:#FB923C; --lean-bg:#FACC15; --lean-ink:#2B2200; --lean-soft:#3A3008; --lean-text:#FFE27A;
+  --flip-bg:#FB923C; --flip-ink:#2B1300; --flip-soft:#40240C; --flip-text:#FFC08A; --weak-bg:#FF6B63; --weak-ink:#2A0705; color-scheme:dark}}
 :root[data-theme="dark"]{
   --bg:#141518; --card:#1F2125; --surface:#282B30; --surface-2:#32363C; --ink:#F2F3F5; --ink-2:#A4A9B0; --ink-3:#777D85;
   --line:#2C2F34; --line-2:#3D4148; --elev:0 1px 0 rgba(255,255,255,.03) inset,0 4px 14px rgba(0,0,0,.25);
   --up:#3DD89A; --up-soft:#0F2A1F; --down:#FF6B63; --down-soft:#2D1516; --warn:#F2B455; --warn-soft:#2A2010;
-  --on-up:#03140C; --focus:#6E9BFF; --btn:#F2F3F5; --on-btn:#141518; color-scheme:dark}
+  --on-up:#03140C; --focus:#6E9BFF; --btn:#F2F3F5; --on-btn:#141518;
+  --lean:#FACC15; --flip:#FB923C; --lean-bg:#FACC15; --lean-ink:#2B2200; --lean-soft:#3A3008; --lean-text:#FFE27A;
+  --flip-bg:#FB923C; --flip-ink:#2B1300; --flip-soft:#40240C; --flip-text:#FFC08A; --weak-bg:#FF6B63; --weak-ink:#2A0705; color-scheme:dark}
 
 *{box-sizing:border-box}
 [hidden]{display:none!important}
@@ -214,9 +238,9 @@ body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset
 .sr{display:grid;gap:3px;justify-items:end}
 .odds{min-width:60px;height:32px;border-radius:var(--r-sm);display:grid;place-items:center;font-weight:700;font-size:15px;font-variant-numeric:tabular-nums;padding:0 8px}
 .o-strong{background:var(--up);color:var(--on-up)}
-.o-lean{background:var(--up-soft);color:var(--up)}
-.o-flip{background:var(--surface-2);color:var(--ink)}
-.o-weak{background:var(--down-soft);color:var(--down)}
+.o-lean{background:var(--lean-bg);color:var(--lean-ink)}
+.o-flip{background:var(--flip-bg);color:var(--flip-ink)}
+.o-weak{background:var(--weak-bg);color:var(--weak-ink)}
 .px{font-size:12px;color:var(--ink-2);white-space:nowrap;font-variant-numeric:tabular-nums}
 .px i{font-style:normal;font-weight:600}
 .rm{width:40px;height:44px;border:0;background:transparent;color:var(--ink-3);border-radius:var(--r-sm);display:grid;place-items:center}
@@ -334,6 +358,12 @@ details.paste textarea{width:100%;min-height:90px;font-family:ui-monospace,Menlo
 .case h4{font-size:14.5px;font-weight:700}
 .case p{font-size:14.5px;color:var(--ink-2);max-width:62ch}
 .reasons{margin:0;padding:0;list-style:none;display:grid;gap:8px}
+.acct{display:flex;align-items:center;justify-content:space-between;gap:12px;font-size:14.5px;color:var(--ink-2)}
+.acct .money{display:inline-flex;align-items:center;gap:4px;font-weight:600;color:var(--ink);border:1px solid var(--line-2);border-radius:var(--r-md);padding:0 12px;height:44px;background:var(--bg)}
+.acct input{width:92px;border:0;background:transparent;font:inherit;font-size:16px;color:inherit;text-align:right;font-variant-numeric:tabular-nums;padding:0;height:42px}
+.acct input:focus{outline:none} .acct .money:focus-within{border-color:var(--ink);box-shadow:0 0 0 1px var(--ink)}
+.rules{margin:4px 0 10px;padding:0;list-style:none;display:grid;gap:8px;font-size:14px;color:var(--ink-2)} .rules li{padding-left:14px;position:relative} .rules li::before{content:"";position:absolute;left:0;top:.6em;width:5px;height:5px;border-radius:50%;background:var(--ink-3)}
+.stats b small{font-weight:500;color:var(--ink-2)}
 .reasons li{display:grid;grid-template-columns:20px 1fr;gap:8px;font-size:14.5px}
 .reasons li::before{content:"✓";color:var(--up);font-weight:800}
 .tags{display:flex;gap:6px;flex-wrap:wrap}
@@ -356,8 +386,11 @@ details.paste textarea{width:100%;min-height:90px;font-family:ui-monospace,Menlo
 @media (prefers-reduced-motion:no-preference){.dial circle.arc{transition:stroke-dashoffset .5s cubic-bezier(.2,.8,.2,1)}}
 .verdict{display:inline-flex;align-items:center;gap:6px;font-size:13px;font-weight:700;padding:4px 10px;border-radius:6px;justify-self:start}
 .verdict i{width:8px;height:8px;border-radius:50%;background:currentColor}
-.v-strong{color:var(--up);background:var(--up-soft)} .v-lean{color:var(--up);background:var(--up-soft)}
-.v-flip{color:var(--ink-2);background:var(--surface)} .v-weak{color:var(--down);background:var(--down-soft)}
+.v-strong{color:var(--up);background:var(--up-soft)} .v-lean{color:var(--lean-text);background:var(--lean-soft)}
+.v-flip{color:var(--flip-text);background:var(--flip-soft)} .v-weak{color:var(--down);background:var(--down-soft)}
+.v-lean i{background:var(--lean)} .v-flip i{background:var(--flip)}
+.v-neutral{color:var(--ink-2);background:var(--surface)}
+.t-strong{color:var(--up)} .t-lean{color:var(--lean-text)} .t-flip{color:var(--flip-text)} .t-weak{color:var(--down)}
 
 /* technical analysis report + chart lab (kept from v1) */
 .ta{display:grid;gap:16px;padding-top:4px}
@@ -417,7 +450,7 @@ body{font-size:15.5px;letter-spacing:0;font-feature-settings:"ss01","cv11"}
 .mixhead b{font-family:var(--f-serif);font-weight:400;font-size:26px;line-height:1.1}
 .mixbar{display:flex;height:10px;border-radius:5px;overflow:hidden;gap:2px;background:var(--surface)}
 .mixbar i{display:block;height:100%;min-width:3px}
-.mixbar .s{background:var(--up)} .mixbar .l{background:color-mix(in srgb,var(--up) 45%,var(--card))} .mixbar .f{background:var(--ink-3);opacity:.55} .mixbar .w{background:var(--down)}
+.mixbar .s{background:var(--strong)} .mixbar .l{background:var(--lean)} .mixbar .f{background:var(--flip)} .mixbar .w{background:var(--weak)}
 .mixleg{display:flex;flex-wrap:wrap;gap:6px 16px;font-size:12.5px;color:var(--ink-2)}
 .mixleg span{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
 .mixleg i{width:8px;height:8px;border-radius:2px;display:inline-block}
@@ -442,9 +475,9 @@ body{font-size:15.5px;letter-spacing:0;font-feature-settings:"ss01","cv11"}
 .sl b{font-size:16px;font-weight:600}
 .odds{min-width:58px;height:30px;border-radius:999px;font-size:14.5px;font-weight:600}
 .o-strong{background:var(--up);color:var(--on-up)}
-.o-lean{background:var(--up-soft);color:var(--up)}
-.o-flip{background:var(--surface);color:var(--ink-2)}
-.o-weak{background:var(--down-soft);color:var(--down)}
+.o-lean{background:var(--lean-bg);color:var(--lean-ink)}
+.o-flip{background:var(--flip-bg);color:var(--flip-ink)}
+.o-weak{background:var(--weak-bg);color:var(--weak-ink)}
 .sk{grid-template-columns:40px 1fr 56px 58px;padding:0 16px}
 .sk .m{width:40px;height:40px;border-radius:50%}
 @media (max-width:400px){.srow.wl{grid-template-columns:40px minmax(0,1fr) auto 32px}.srow.wl .spark{display:none}}
@@ -474,7 +507,8 @@ details.paste summary{color:var(--ink)}
 .sp-price{font-family:var(--f-serif);font-weight:400;font-size:48px;letter-spacing:-.02em;line-height:1}
 .pricebox{gap:6px}
 .ranges{border-bottom:0;background:var(--surface);border-radius:999px;padding:4px;justify-content:space-between}
-.ranges button{border-radius:999px;height:34px}
+.ranges button{border-radius:999px;height:36px;flex:1 1 0;min-width:0;padding:0}
+.pricebox{grid-template-columns:minmax(0,1fr)} .pricebox>*,#priceBox>*{min-width:0}
 .ranges button[aria-pressed=true]{background:var(--card);box-shadow:0 1px 2px rgba(0,0,0,.08),0 0 0 1px var(--line)}
 .block{background:var(--card);border-radius:var(--r-lg);padding:18px}
 .block h3{font-size:16.5px;font-weight:600;letter-spacing:-.005em}
@@ -600,7 +634,8 @@ details.paste summary{color:var(--ink)}
       <div class="o-flip"><b>46–51</b><span>Coin flip</span></div>
       <div class="o-weak"><b>Under 46</b><span>Weak</span></div>
     </div>
-    <p><b>What moves it:</b> buzz on Reddit, YouTube and finance news; analyst ratings and targets; the price trend (moving averages, RSI, MACD, Bollinger Bands); and the business itself (growth, profits, P/E). Short holds lean on buzz and trend, long holds on analysts and the business. Earnings inside the window pull the odds toward 50%.</p>
+    <p><b>What moves it:</b> buzz on Reddit (WallStreetBets, r/stocks, r/investing and more), Stocktwits, YouTube and finance news; analyst ratings, targets and upgrades; the price trend; short interest; and the business itself (growth, profits, P/E). Short holds lean on buzz and trend, long holds on analysts and the business. Earnings inside the window pull the odds toward 50%.</p>
+    <p><b>The trend score</b> checks every chart the same way: moving averages, RSI, MACD and Bollinger Bands, the weekly trend and whether all timeframes agree, volume, 50-day highs and lows, and how many investors are betting against the stock. The rules come from Technical Analysis of the Financial Markets (Murphy), The New Trading for a Living (Elder) and Technical Analysis Using Multiple Timeframes (Shannon).</p>
     <p>A 62% stock still drops 38 times in 100. Use this to decide what to research, spread your money out, and only risk what you can afford to lose. Not financial advice.</p>
   </section>
 
@@ -679,7 +714,7 @@ function priceInfo(t){
   if(rows.length<21) return null;
   const ref=new Date(((S.week&&S.week.weekOf)||new Date().toISOString().slice(0,10))+"T12:00:00");
   const last=new Date(rows[rows.length-1].d+"T12:00:00");
-  return {rows, last:rows[rows.length-1].d, fresh:(ref-last)/864e5<=14, src:d.source||"", a:analyze(rows)};
+  return {rows, last:rows[rows.length-1].d, fresh:(ref-last)/864e5<=14, src:d.source||"", a:analyze(rows,{hlv:Array.isArray(d.hlv)?d.hlv:null,short:d.short||null,spy:t==="SPY"?null:spyRows()})};
 }
 function trendSource(t){ if(S.chart[t]!=null) return "file"; const pi=priceInfo(t); return pi&&pi.fresh?"auto":null; }
 function scoresOf(p){ const s=Object.assign({},p.scores||{});
@@ -696,9 +731,10 @@ function prob(p,h){
   const adj=(S.week&&S.week.regime&&S.week.regime.adj)||0;
   return Math.round(clamp(c.base+e+(h==="lt"?0:adj),30,78));
 }
+const techTone=x=>x>=65?"strong":x>=50?"lean":x>=35?"flip":"weak";
 function band(v){ return v>=60?["strong","Strong"]:v>=52?["lean","Leans up"]:v>=46?["flip","Coin flip"]:["weak","Weak"]; }
-function dial(v,size,stroke){
-  const r=(size-stroke)/2, C=2*Math.PI*r, [b]=band(v);
+function dial(v,size,stroke,tone){
+  const r=(size-stroke)/2, C=2*Math.PI*r, b=tone||band(v)[0];
   return '<div class="dial" style="width:'+size+'px;height:'+size+'px"><svg width="'+size+'" height="'+size+'" aria-hidden="true">'+
     '<circle cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="var(--fog)" stroke-width="'+stroke+'"/>'+
     '<circle class="arc" cx="'+size/2+'" cy="'+size/2+'" r="'+r+'" fill="none" stroke="var(--'+b+')" stroke-width="'+stroke+'" stroke-linecap="round" stroke-dasharray="'+C.toFixed(1)+'" stroke-dashoffset="'+(C*(1-v/100)).toFixed(1)+'"/></svg>'+
@@ -714,6 +750,7 @@ function tags(p){
   if(f.includes("acquired")) out.push('<span class="tag w">Being bought</span>');
   if(f.includes("contrarian")) out.push('<span class="tag">Beaten down</span>');
   if(f.includes("highrisk")) out.push('<span class="tag r">Big swings</span>');
+  if(f.includes("squeeze")) out.push('<span class="tag w">Squeeze watch</span>');
   if(S.chart[p.t]!=null) out.push('<span class="tag">Using your chart</span>');
   return out.join("");
 }
@@ -738,7 +775,11 @@ function findPick(t){
   return sp||null;
 }
 function nameOf(t){ const p=findPick(t); return (p&&p.name)||(S.prices[t]&&S.prices[t].name)||(PUB&&window.SS_PUBLIC.nameOf?window.SS_PUBLIC.nameOf(t):"")||""; }
-function techOf(t){ const pi=priceInfo(t); if(!pi) return null; try{ const ta=technical(pi.rows,fundOf(t)); return ta&&ta.score!=null?ta:null; }catch(e){ return null; } }
+function spyRows(){ const d=S.prices.SPY; return d&&Array.isArray(d.rows)?d.rows:null; }
+function shortOf(t,d){ const f=(d||S.prices[t]||{}).short||null, p=findPick(t), ps=p&&p.short; /* researched % of float wins over our % of shares */
+  if(ps&&isFinite(+ps.pctFloat)) return Object.assign({},f||{},{pctOut:+ps.pctFloat,float:true},isFinite(+ps.daysToCover)&&!(f&&isFinite(+f.dtc))?{dtc:+ps.daysToCover}:{},!(f&&f.date)&&ps.asOf?{date:ps.asOf}:{}); return f; }
+function extOf(t){ const d=S.prices[t]||{}; return {hlv:Array.isArray(d.hlv)?d.hlv:null, short:shortOf(t,d), spy:t==="SPY"?null:spyRows()}; }
+function techOf(t){ const pi=priceInfo(t); if(!pi) return null; try{ const ta=technical(pi.rows,fundOf(t),extOf(t)); return ta&&ta.score!=null?ta:null; }catch(e){ return null; } }
 function quoteOf(t){ const q=S.prices[t]&&S.prices[t].quote; return q&&isFinite(+q.price)?q:null; }
 function qHTML(t){ const q=quoteOf(t); if(!q) return ""; const ch=+q.changePct;
   return '<span class="qt">$'+(+q.price>=100?(+q.price).toFixed(2):(+q.price).toFixed(2))+(isFinite(ch)?' <span class="'+(ch>=0?"up":"dn")+'">'+(ch>=0?"▲":"▼")+Math.abs(ch).toFixed(1)+'%</span>':'')+'</span>'; }
@@ -773,7 +814,7 @@ function renderMix(wk){
   const seg=[["strong","s","Strong"],["lean","l","Leans up"],["flip","f","Coin flip"],["weak","w","Weak"]];
   $("mixBar").innerHTML=seg.filter(([k])=>c[k]).map(([k,cl])=>'<i class="'+cl+'" style="flex:'+c[k]+'"></i>').join("");
   $("mixBar").setAttribute("aria-label",seg.map(([k,,l])=>c[k]+" "+l.toLowerCase()).join(", "));
-  $("mixLeg").innerHTML=seg.map(([k,cl,l])=>'<span><i class="mixbar-'+cl+'" style="background:'+({s:"var(--up)",l:"color-mix(in srgb,var(--up) 45%,var(--card))",f:"var(--ink-3)",w:"var(--down)"})[cl]+'"></i>'+l+' <b>'+c[k]+'</b></span>').join("");
+  $("mixLeg").innerHTML=seg.map(([k,cl,l])=>'<span><i class="mixbar-'+cl+'" style="background:'+({s:"var(--strong)",l:"var(--lean)",f:"var(--flip)",w:"var(--weak)"})[cl]+'"></i>'+l+' <b>'+c[k]+'</b></span>').join("");
   const d=new Date(wk.weekOf+"T12:00:00"); $("dayDate").textContent=isNaN(d)?"":"Week of "+d.toLocaleDateString(undefined,{month:"long",day:"numeric"});
 }
 function renderToday(){
@@ -812,7 +853,7 @@ function renderWatch(){
     if(st.p){ const p=Object.assign({},st.p,{_v:st.v}); return rowHTML(p,rm(t)||' ',metaLine(p,true)); }
     const q=quoteOf(t), pi=priceInfo(t), ta=techOf(t), nm=nameOf(t), ch=q&&isFinite(+q.changePct)?+q.changePct:null;
     const known=PUB&&window.SS_PUBLIC.lookup?window.SS_PUBLIC.lookup(t):null;
-    const tech=ta?'Tech <b class="num">'+ta.score+'</b>/100':'';
+    const tech=ta?'Tech <b class="num t-'+techTone(ta.score)+'">'+ta.score+'</b>/100':'';
     const msg=st.pending!=null?'<span class="g">Scoring now'+(st.pending?' · '+st.pending+' min':'')+'</span> · usually 3–5 minutes'
       :st.err?'<span class="r">'+esc(st.err)+'</span>'
       :PUB?(tech||(q||pi?'No odds yet':known===false?'<span class="w">No price data for this symbol</span>':'Loading price…'))
@@ -827,12 +868,15 @@ setInterval(()=>{ if(S.watch.some(t=>wlState(t).pending!=null)) renderWatch(); }
 const FWHAT={buzz:["Quiet online","Some chatter","Lots of positive talk"],analyst:["Analysts cautious","Mixed ratings","Analysts bullish"],momentum:["Price trending down","Going sideways","Price trending up"],fund:["Weak business numbers","Solid business","Strong growth and profits"]};
 let lastFocus=null, openT=null;
 /* Robinhood-style big chart with timeframe + scrub that drives the header price */
-const RANGES=[["1W",5],["1M",21],["3M",63],["6M",126],["1Y",252],["All",1e9]];
+const RANGES=[["1W",5],["1M",21],["3M",63],["6M",126],["1Y",252]];
+/* 5Y and All use the all-time series (monthly + weekly closes), loaded the first time they're tapped */
+const LONGSTATE={};
+function longRows(t){ const d=S.prices[t], L=d&&Array.isArray(d.long)?d.long:null; if(!L||L.length<2) return null; return L.map(r=>({d:r[0],c:+r[1]})).filter(r=>r.d&&isFinite(r.c)&&r.c>0); }
 let RH={t:null,range:"1M"}, LWC=null;
 function rhPrice(v){ return v==null||!isFinite(v)?"—":"$"+(+v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2}); }
 const cssVar=n=>getComputedStyle(document.documentElement).getPropertyValue(n).trim();
 function hexA(hex,a){ const h=(hex||"").replace("#",""); if(h.length!==6) return hex; return "rgba("+parseInt(h.slice(0,2),16)+","+parseInt(h.slice(2,4),16)+","+parseInt(h.slice(4,6),16)+","+a+")"; }
-const rangeLabel=r=>({"1W":"Past week","1M":"Past month","3M":"Past 3 months","6M":"Past 6 months","1Y":"Past year","All":"All time"})[r]||"";
+const rangeLabel=r=>({"1W":"Past week","1M":"Past month","3M":"Past 3 months","6M":"Past 6 months","1Y":"Past year","5Y":"Past 5 years","All":"All time"})[r]||"";
 function chgText(d,base){ const pc=base?d/base*100:0; return (d>=0?"+":"−")+"$"+Math.abs(d).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})+" ("+(pc>=0?"+":"−")+Math.abs(pc).toFixed(2)+"%)"; }
 function killChart(){ if(LWC){ try{ LWC.remove(); }catch(e){} LWC=null; } }
 function renderPrice(t){
@@ -840,18 +884,31 @@ function renderPrice(t){
   const pi=priceInfo(t), q=quoteOf(t);
   const today=q&&isFinite(+q.changePct)?'<div class="sp-chg '+(+q.changePct>=0?"up":"dn")+'">'+(+q.changePct>=0?"+":"−")+Math.abs(+q.changePct).toFixed(2)+'% <span class="muted">Today</span></div>':"";
   if(!pi){ box.innerHTML='<div class="sp-price">'+(q?rhPrice(+q.price):"—")+'</div>'+today+'<p class="sub" style="margin-top:8px">No price history yet. It fills in automatically on weekdays.</p>'; return; }
-  const rowsAll=pi.rows;
-  const avail=RANGES.filter(r=>r[0]==="All"?rowsAll.length>RANGES.filter(x=>x[0]!=="All"&&x[1]<=rowsAll.length+3).slice(-1)[0][1]+5:r[1]<=rowsAll.length+3);
-  if(!avail.find(r=>r[0]===RH.range)) RH.range=avail[avail.length-1][0];
-  const n=(RANGES.find(r=>r[0]===RH.range)||RANGES[1])[1], rs=rowsAll.slice(-Math.min(rowsAll.length,n+1));
+  const rowsAll=pi.rows, lr=longRows(t), lastD=rowsAll[rowsAll.length-1].d;
+  const all=lr?lr.filter(r=>r.d<rowsAll[0].d).concat(rowsAll):null, spanY=all?(Date.parse(lastD)-Date.parse(all[0].d))/864e5/365.25:0;
+  const canLoad=!all&&PUB&&window.SS_PUBLIC.loadLong&&LONGSTATE[t]!=="none";
+  const daily=RANGES.filter(r=>r[1]<=rowsAll.length+3), avail=daily.map(r=>r[0]);
+  if(all&&all.length>rowsAll.length){ if(spanY>5.5) avail.push("5Y"); avail.push("All"); }
+  else if(canLoad) avail.push("5Y","All");
+  else if(rowsAll.length>daily[daily.length-1][1]+5) avail.push("All");
+  if(!avail.includes(RH.range)) RH.range=RH.range==="5Y"&&avail.includes("All")?"All":avail.includes("1M")?"1M":avail[avail.length-1];
+  const isLong=RH.range==="5Y"||RH.range==="All", loading=isLong&&canLoad;
+  if(loading&&LONGSTATE[t]!=="loading"){ LONGSTATE[t]="loading";
+    window.SS_PUBLIC.loadLong(t).then(ok=>{ LONGSTATE[t]=ok?"ok":"none"; if(!ok){ toast("Full history isn't available for "+t+" yet."); if(RH.t===t) RH.range="1Y"; } if(openT===t) renderPrice(t); }); }
+  let rs;
+  if(isLong&&all){ if(RH.range==="5Y"){ const cut=new Date(Date.parse(lastD)-5*365.25*864e5).toISOString().slice(0,10); rs=all.filter(r=>r.d>=cut); } else rs=all; }
+  else if(isLong) rs=rowsAll;
+  else { const n=(RANGES.find(r=>r[0]===RH.range)||RANGES[1])[1]; rs=rowsAll.slice(-Math.min(rowsAll.length,n+1)); }
+  const since=new Date(rs[0].d+"T12:00:00"), sinceTxt=isNaN(since)?"":since.toLocaleDateString(undefined,{month:"short",year:"numeric"});
+  const rLabel=loading?"Loading full history…":RH.range==="All"?"Since "+sinceTxt:rangeLabel(RH.range);
   const first=rs[0].c, last=rs[rs.length-1].c, up=last>=first, headP=q?+q.price:last;
   box.innerHTML='<div class="sp-price" id="spP">'+rhPrice(headP)+'</div>'+
-    '<div class="sp-chg '+(up?"up":"dn")+'" id="spC"><span>'+chgText(last-first,first)+'</span> <span class="muted" id="spL">'+rangeLabel(RH.range)+'</span></div>'+today+
-    '<div class="chartbox" id="chartBox" role="img" aria-label="'+esc(t)+' price, '+rangeLabel(RH.range).toLowerCase()+': from '+rhPrice(first)+' to '+rhPrice(last)+'"></div>'+
-    '<div class="ranges" role="group" aria-label="Time range">'+avail.map(r=>'<button type="button" data-range="'+r[0]+'" aria-pressed="'+(r[0]===RH.range)+'">'+r[0]+'</button>').join("")+'</div>'+
-    '<p class="asof">Daily closes through '+esc(fmtDate(pi.last))+(q&&q.asOf?' · last price '+esc(q.asOf):'')+'. Drag across the chart to see each day.</p>';
+    '<div class="sp-chg '+(up?"up":"dn")+'" id="spC"><span>'+chgText(last-first,first)+'</span> <span class="muted" id="spL">'+rLabel+'</span></div>'+today+
+    '<div class="chartbox" id="chartBox" role="img" aria-label="'+esc(t)+' price, '+rLabel.toLowerCase()+': from '+rhPrice(first)+' to '+rhPrice(last)+'"></div>'+
+    '<div class="ranges" role="group" aria-label="Time range">'+avail.map(r=>'<button type="button" data-range="'+r+'" aria-pressed="'+(r===RH.range)+'">'+r+'</button>').join("")+'</div>'+
+    '<p class="asof">'+(isLong&&all?'Monthly closes since '+esc(sinceTxt)+', weekly for the last two years, daily for the last year':'Daily closes through '+esc(fmtDate(pi.last)))+(q&&q.asOf?' · last price '+esc(q.asOf):'')+'. Drag across the chart to see each '+(isLong&&all?'point':'day')+'.</p>';
   const el=$("chartBox"), P=$("spP"), C=$("spC"), L=$("spL"), col=cssVar(up?"--up":"--down");
-  const scrub=(v,d)=>{ const cur=v==null?last:v; P.textContent=v==null?rhPrice(headP):rhPrice(v); C.firstChild.textContent=chgText(cur-first,first); C.className="sp-chg "+(cur>=first?"up":"dn"); L.textContent=v==null?rangeLabel(RH.range):fmtDate(d); };
+  const scrub=(v,d)=>{ const cur=v==null?last:v; P.textContent=v==null?rhPrice(headP):rhPrice(v); C.firstChild.textContent=chgText(cur-first,first); C.className="sp-chg "+(cur>=first?"up":"dn"); L.textContent=v==null?rLabel:(isLong?new Date(d+"T12:00:00").toLocaleDateString(undefined,{month:"short",day:"numeric",year:"numeric"}):fmtDate(d)); };
   if(window.LightweightCharts){
     try{
       const chart=LightweightCharts.createChart(el,{autoSize:true,
@@ -887,12 +944,13 @@ function openSheet(t){
   const wasOpen=!!openT&&$("sheet").classList.contains("on"), keep=wasOpen?$("sheet").scrollTop:0, taOpen=wasOpen&&openT===t&&$("shTA")&&!$("shTA").hidden;
   if(!wasOpen) lastFocus=document.activeElement;
   openT=t; if(RH.t!==t) RH={t,range:"1M"};
-  const v=lite?null:prob(p,S.h), s=scoresOf(p), base=HZ[S.h].base, pi=priceInfo(t), ts=trendSource(t), fu=fundOf(t), ta=pi?technical(pi.rows,fu):null;
+  const v=lite?null:prob(p,S.h), s=scoresOf(p), base=HZ[S.h].base, pi=priceInfo(t), ts=trendSource(t), fu=fundOf(t), ta=pi?technical(pi.rows,fu,extOf(t)):null;
   const watching=S.watch.includes(t), an=p.analyst||null;
-  const barCol=x=>{ const b=band(x)[0]; return b==="weak"?"var(--down)":b==="flip"?"var(--ink-3)":"var(--up)"; };
+  const barCol=x=>"var(--"+band(x)[0]+")";
   const hz=lite?"":Object.keys(HZ).map(h=>{ const x=prob(p,h); return '<div class="hzr'+(h===S.h?' on':'')+'"><span>'+HZ[h].short+'</span><span class="track" aria-hidden="true"><i style="width:'+x+'%;background:'+barCol(x)+'"></i><b style="left:'+HZ[h].base+'%"></b></span><b class="num">'+x+'%</b></div>'; }).join("");
   const fc=FACT.map(([k,l])=>{ const val=Math.round(+s[k]||50), w=FWHAT[k][val>=65?2:val>=45?1:0]+(k==="momentum"&&ts==="file"?" · from your price file":k==="momentum"&&ts==="auto"?" · from daily prices":""); return '<div class="factor"><span class="t">'+l+'</span><span class="meter" aria-hidden="true"><i style="width:'+val+'%"></i></span><span class="v">'+val+'</span><span class="w">'+w+'</span></div>'; }).join("");
-  const stats=[["P/E",fu.pe!=null?fu.pe.toFixed(1):"—"],["Forward P/E",fu.fpe!=null?fu.fpe.toFixed(1):"—"],["Size",({large:"Large",mid:"Mid",small:"Small"}[p.cap]||"—")],["52-week high",fu.hi!=null?rhPrice(fu.hi):"—"],["52-week low",fu.lo!=null?rhPrice(fu.lo):"—"],["Tech score",ta&&ta.score!=null?ta.score+"/100":"—"]];
+  const stats=[["P/E",fu.pe!=null?fu.pe.toFixed(1):"—"],["Forward P/E",fu.fpe!=null?fu.fpe.toFixed(1):"—"],["Size",({large:"Large",mid:"Mid",small:"Small"}[p.cap]||"—")],["52-week high",fu.hi!=null?rhPrice(fu.hi):"—"],["52-week low",fu.lo!=null?rhPrice(fu.lo):"—"],["Tech score",ta&&ta.score!=null?ta.score+"/100":"—"],
+    ["Short interest",ta&&ta.short&&isFinite(+ta.short.pctOut)?(+ta.short.pctOut).toFixed(1)+"%":"—"],["Days to cover",ta&&ta.short&&isFinite(+ta.short.dtc)?(+ta.short.dtc).toFixed(1):"—"],["Daily swing",ta&&ta.atr?(ta.atr/ta.last*100).toFixed(1)+"%":"—"]];
   const tg=tags(p);
   const target=an&&an.target?(String(an.target).startsWith("$")?an.target:rhPrice(+an.target)):"";
   $("sheetIn").innerHTML=
@@ -908,6 +966,11 @@ function openSheet(t){
       (p.reasons&&p.reasons.length?'<ul class="reasons">'+p.reasons.map(r=>'<li>'+esc(r)+'</li>').join("")+'</ul>':'')+'</section>':'')+
     '<section class="block" aria-labelledby="statsH"><h3 id="statsH">Key stats</h3><div class="stats">'+stats.map(([k,x])=>'<div><span>'+k+'</span><b>'+esc(x)+'</b></div>').join("")+'</div></section>'+
     (pi?'<div><button class="disclosure" id="shTAbtn" type="button" aria-expanded="false" aria-controls="shTA"><span class="l"><b>Technical analysis</b><span class="sub">'+(ta&&ta.score!=null?ta.score+'/100 · '+ta.verdict+' · '+ta.used+' of '+ta.total+' signals':'Needs more price history')+'</span></span>'+DOWN+'</button><div id="shTA" hidden></div></div>':'')+
+    (ta&&ta.atr?'<section class="block" aria-labelledby="planH"><h3 id="planH">Plan the trade</h3>'+
+      '<label class="acct" for="acctIn"><span>Your account size</span><span class="money">$<input id="acctIn" name="accountSize" type="text" inputmode="decimal" autocomplete="off" maxlength="9" value="'+esc(acctSize())+'" aria-describedby="planOut"></span></label>'+
+      '<div id="planOut">'+planHTML(ta)+'</div>'+
+      '<ul class="rules"><li>Pick your exit before you buy, and take the loss when it hits. Small losses keep you in the game.</li><li>One trade is one of many. '+(v!=null?v+'% odds still lose '+(100-v)+' times in 100.':'Even good setups lose often.')+'</li><li>Risk at most 2% of your account on one trade, and stop for the month if you\'re down 6%.</li></ul>'+
+      '<p class="sub">Rules from Best Loser Wins (Hougaard), Trading in the Zone (Douglas) and The New Trading for a Living (Elder).</p></section>':'')+
     (lite?'':'<section class="block" aria-labelledby="facH"><h3 id="facH">What drives the odds</h3><div>'+fc+'</div></section>')+
     ((p.thesis||p.bear||p.catalyst||p.social)?'<section class="block" aria-labelledby="caseH"><h3 id="caseH">The case</h3><div class="case">'+
       (p.thesis?'<div class="bull"><h4>Why it could rise</h4><p>'+esc(p.thesis)+'</p></div>':'')+
@@ -921,6 +984,13 @@ function openSheet(t){
   renderPrice(t);
   if(taOpen) toggleTA(true);
   if(!wasOpen) setTimeout(()=>$("shClose").focus({preventScroll:true}),30);
+}
+function acctSize(){ const v=parseFloat(String(store("ss_acct")||"").replace(/[^0-9.]/g,"")); return isFinite(v)&&v>0?Math.min(v,99999999):1000; }
+function planHTML(ta){
+  const acct=acctSize(), px=ta.last, stop=Math.max(px-2*ta.atr,px*0.5), sp=(px-stop)/px, risk=acct*0.02, pos=Math.min(acct,risk/sp), sh=pos/px;
+  const m0=v=>"$"+Math.round(v).toLocaleString();
+  return '<div class="stats" style="margin:12px 0"><div><span>Typical daily swing</span><b>'+rhPrice(ta.atr)+'</b></div><div><span>Stop idea</span><b>'+rhPrice(stop)+'</b></div><div><span>Most to put in</span><b>'+m0(pos)+'</b></div></div>'+
+    '<p class="sub">A stop two daily swings below the price sits at '+rhPrice(stop)+' ('+(sp*100).toFixed(1)+'% down)'+(ta.support&&ta.support<px?', and the 50-day low is '+rhPrice(ta.support):'')+'. Risking 2% of '+m0(acct)+' is '+m0(risk)+', so the most to put in is about '+m0(pos)+' ('+(sh>=10?Math.floor(sh):sh.toFixed(2))+' shares).'+(ta.atrEst?' Swing size is estimated from closing prices.':'')+'</p>';
 }
 function toggleTA(force){ const box=$("shTA"), b=$("shTAbtn"); if(!box||!b) return; const open=force!=null?force:box.hidden;
   if(open&&!box.innerHTML){ const pi=priceInfo(openT); box.innerHTML=pi?taReport(openT,pi.rows,pi.src):""; }
@@ -951,6 +1021,7 @@ document.addEventListener("keydown",e=>{ if((e.key==="Enter"||e.key===" ")&&e.ta
 document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{ S.h=b.dataset.h; document.querySelectorAll(".seg button").forEach(x=>x.setAttribute("aria-pressed",x===b)); store("ss_h",S.h); renderAll(); }));
 document.querySelectorAll("#v-today .chip").forEach(b=>b.addEventListener("click",()=>{ S.f=b.dataset.c; document.querySelectorAll("#v-today .chip").forEach(x=>x.setAttribute("aria-pressed",x===b)); renderToday(); }));
 $("q").addEventListener("input",e=>{ S.q=e.target.value; renderToday(); });
+$("sheetIn").addEventListener("input",e=>{ if(e.target.id!=="acctIn"||!openT) return; store("ss_acct",e.target.value); const pi=priceInfo(openT), ta=pi?technical(pi.rows,fundOf(openT),extOf(openT)):null; if(ta&&ta.atr&&$("planOut")) $("planOut").innerHTML=planHTML(ta); });
 $("weekSel").addEventListener("change",e=>{ S.week=S.weeks.find(w=>w.weekOf===e.target.value)||S.week; renderAll(); });
 const savedH=store("ss_h"); if(savedH&&HZ[savedH]){ S.h=savedH; document.querySelectorAll(".seg button").forEach(x=>x.setAttribute("aria-pressed",x.dataset.h===savedH)); }
 
@@ -1008,12 +1079,12 @@ function parseCSV(txt){
 }
 const sma=(a,n,i)=>{ if(i<n-1) return null; let s=0; for(let k=i-n+1;k<=i;k++) s+=a[k]; return s/n; };
 function rsi(a,n){ let g=0,l=0; for(let i=a.length-n;i<a.length;i++){ const d=a[i]-a[i-1]; if(d>0) g+=d; else l-=d; } return l===0?100:100-100/(1+g/l); }
-function analyze(rows){
+function analyze(rows,ext){
   const c=rows.map(r=>r.c), n=c.length, last=c[n-1];
   const s20=sma(c,20,n-1), s50=n>=50?sma(c,50,n-1):null, s200=n>=200?sma(c,200,n-1):null, r14=rsi(c,14), ret20=(last/c[n-21]-1)*100;
   let sc=50; sc+=last>s20?8:-8; if(s50!=null){ sc+=last>s50?10:-10; sc+=s20>s50?7:-7; } if(s200!=null) sc+=last>s200?8:-8;
   sc+=clamp(ret20,-15,15)*.8; if(r14>75) sc-=8; else if(r14>=50) sc+=5; else if(r14<30) sc+=3; else sc-=4;
-  const tsc=technical(rows,{}).techScore;
+  const tsc=technical(rows,{},ext).techScore;
   return {c,last,s20,s50,s200,r14,ret20,score:tsc!=null?tsc:Math.round(clamp(sc,5,95))};
 }
 
@@ -1027,9 +1098,11 @@ function fundOf(t){
   const num=v=>{ const x=parseFloat(String(v==null?"":v).replace(/[^0-9.\-]/g,"")); return isFinite(x)?x:null; };
   return {pe:num(f.pe), fpe:num(f.forwardPe), hi:num(f.high52), lo:num(f.low52), price:num(f.price)};
 }
-const SIG=s=>s>=1?["Bullish","strong"]:s>0?["Leans bullish","strong"]:s===0?["Neutral","flip"]:s>-1?["Leans bearish","weak"]:["Bearish","weak"];
-function technical(rows,fund){
-  const c=rows.map(r=>r.c), n=c.length, last=c[n-1], f=fund||{}; const items=[]; const add=(group,name,value,sig,w,note)=>items.push({group,name,value,sig:sig==null?null:clamp(sig,-2,2),w,note});
+const SIG=s=>s>=1?["Bullish","strong"]:s>0?["Leans bullish","lean"]:s===0?["Neutral","neutral"]:s>-1?["Leans bearish","flip"]:["Bearish","weak"];
+function weeklyCloses(rows){ const out=[]; let key=null; rows.forEach(r=>{ const k=Math.floor((Date.parse(r.d+"T12:00:00Z")/864e5+3)/7); if(k!==key){ out.push(r.c); key=k; } else out[out.length-1]=r.c; }); return out; }
+function macdHist(a){ if(a.length<35) return []; const e12=emaSeries(a,12), e26=emaSeries(a,26), mv=a.map((_,i)=>e12[i]!=null&&e26[i]!=null?e12[i]-e26[i]:null).filter(x=>x!=null), sg=emaSeries(mv,9); return mv.map((v,i)=>sg[i]!=null?v-sg[i]:null).filter(x=>x!=null); }
+function technical(rows,fund,ext){
+  const c=rows.map(r=>r.c), n=c.length, last=c[n-1], f=fund||{}, X=ext||{}; const items=[]; const add=(group,name,value,sig,w,note)=>items.push({group,name,value,sig:sig==null?null:clamp(sig,-2,2),w,note});
   const pct=v=>(v>=0?"+":"")+v.toFixed(1)+"%";
   const s20=sma(c,20,n-1), s50=n>=50?sma(c,50,n-1):null, s200=n>=200?sma(c,200,n-1):null;
   // Trend
@@ -1039,6 +1112,9 @@ function technical(rows,fund){
   if(s200!=null){ const d=(last/s200-1)*100; add("Trend","Price vs 200-day average",pct(d),d>0?2:-2,2,d>0?"Above the long-term trend: a primary uptrend.":"Below the long-term trend: a primary downtrend."); }
   else add("Trend","Price vs 200-day average","Needs 200 days",null,2,"Not enough price history yet.");
   if(s50!=null&&s20!=null){ const p20=sma(c,20,n-6), p50=sma(c,50,n-6); const cross=p20!=null&&p50!=null&&((p20<=p50)!==(s20<=s50)); add("Trend","20-day vs 50-day average",s20>s50?"20 above 50":"20 below 50",s20>s50?(cross?2:1):(cross?-2:-1),1.5,cross?(s20>s50?"Fresh golden cross in the last week: a classic bullish signal.":"Fresh death cross in the last week: a classic bearish signal."):(s20>s50?"Short-term average is above the medium-term one: uptrend intact.":"Short-term average is below the medium-term one: downtrend intact.")); }
+  // Relative strength (Murphy): is it beating the market?
+  if(X.spy&&n>=64){ const sm={}; X.spy.forEach(r=>{ sm[r[0]]=+r[1]; }); const s1=sm[rows[n-1].d], s0=sm[rows[n-64].d];
+    if(s1>0&&s0>0){ const d=(last/c[n-64]-s1/s0)*100; add("Trend","Strength vs the S&P 500, 3 months",pct(d),d>5?1.5:d>0?0.5:d>-5?-0.5:-1.5,1,d>0?"Beating the market over the past three months. Leaders tend to keep leading.":"Lagging the market over the past three months."); } }
   // Momentum (overbought readings matter less inside a confirmed uptrend, oversold less inside a downtrend)
   const trendUp=s200!=null?last>s200:s50!=null?last>s50:null;
   const ctx=sg=>trendUp===true&&sg<0&&sg>-2?sg/2:trendUp===false&&sg>0?sg/2:sg;
@@ -1057,6 +1133,41 @@ function technical(rows,fund){
     add("Volatility","Band width",bw.toFixed(1)+"%",0,0,widths.length>5&&(up-lo)/mid<=minW*1.1?"Bands are near their tightest: a squeeze often comes before a big move either way.":"How wide the price swings are relative to the price."); }
   if(n>=21){ let rs=[]; for(let i=Math.max(1,n-20);i<n;i++) rs.push(Math.log(c[i]/c[i-1])); const mu=rs.reduce((a,b)=>a+b,0)/rs.length, vol=Math.sqrt(rs.reduce((a,b)=>a+(b-mu)**2,0)/rs.length)*Math.sqrt(252)*100;
     add("Volatility","Volatility (yearly)",vol.toFixed(0)+"%",vol>70?-1:vol>45?-0.5:0,0.5,vol>70?"Very large daily swings: size positions small.":vol>45?"Above-average swings.":"Normal price swings."); }
+  // Multiple timeframes (Elder's Triple Screen, Shannon's timeframe alignment)
+  const wk=weeklyCloses(rows), wn=wk.length; let wkUp=null;
+  if(wn>=30){ const e26=emaSeries(wk,26), sl=e26[wn-1]-e26[wn-2], wh=macdHist(wk), hs=wh.length>1?wh[wh.length-1]-wh[wh.length-2]:null; wkUp=sl>0;
+    add("Timeframes","Weekly trend (the tide)",sl>0?"Rising":"Falling",sl>0?(hs==null||hs>0?2:1):(hs==null||hs<0?-2:-1),2,sl>0?(hs!=null&&hs<=0?"The 26-week average is rising but weekly momentum is slowing.":"The 26-week average is rising and weekly momentum agrees. Trade in the direction of the tide."):(hs!=null&&hs>=0?"The 26-week average is falling, though weekly momentum is improving.":"The 26-week average is falling and weekly momentum agrees. Buying here is swimming against the tide.")); }
+  else add("Timeframes","Weekly trend (the tide)","Needs 30 weeks",null,2,"Not enough price history yet.");
+  { const s10=n>=10?sma(c,10,n-1):null, tf=[]; if(s10!=null&&s20!=null) tf.push(last>s10&&s10>s20); if(s50!=null&&s20!=null) tf.push(last>s50&&s20>s50); if(s200!=null&&s50!=null) tf.push(last>s200&&s50>s200); else if(wkUp!=null) tf.push(wkUp);
+    if(tf.length===3){ const k=tf.filter(Boolean).length; add("Timeframes","Timeframes in agreement",k+" of 3 up",k===3?2:k===2?1:k===1?-1:-2,1.5,k===3?"Short, medium and long-term trends all point up. The cleanest trades have every timeframe agreeing.":k===0?"Short, medium and long-term trends all point down.":"The timeframes disagree, so expect choppier trading until they line up."); } }
+  if(wkUp!=null&&rv!=null&&n>=14){ const w14=c.slice(-14), lo14=Math.min(...w14), hi14=Math.max(...w14), k=hi14===lo14?50:(last-lo14)/(hi14-lo14)*100, dip=rv<45||k<30, hot=rv>65||k>80;
+    add("Timeframes","Triple screen setup",wkUp?(dip?"Pullback in uptrend":"Uptrend, no pullback"):(hot?"Rally in downtrend":"Downtrend"),wkUp?(dip?1.5:0.5):(hot?-1.5:-0.5),1,wkUp?(dip?"Weekly trend is up and the daily chart has dipped: the classic buy zone in Elder's Triple Screen.":"Weekly trend is up, but the daily chart hasn't pulled back. Chasing here means a wider stop."):(hot?"A bounce inside a weekly downtrend. These rallies often fade.":"Weekly trend is down and the daily chart is weak.")); }
+  if(n>=40){ const e13=emaSeries(c,13), es=e13[n-1]-e13[n-2], dh=macdHist(c), hs=dh.length>1?dh[dh.length-1]-dh[dh.length-2]:0, g=es>0&&hs>0, rd=es<0&&hs<0;
+    add("Momentum","Impulse system",g?"Green":rd?"Red":"Blue",g?1.5:rd?-1.5:0,1,g?"The 13-day average and MACD are both rising: buyers are in control.":rd?"The 13-day average and MACD are both falling: sellers are in control. Elder's rule: don't buy while it's red.":"Trend and momentum disagree, so neither side is in control."); }
+  // Levels (Murphy: support, resistance and breakouts)
+  if(n>=50){ const w50=c.slice(-50), hi50=Math.max(...w50), lo50=Math.min(...w50), offH=(last/hi50-1)*100, offL=(last/lo50-1)*100;
+    add("Levels","50-day high and low",last>=hi50*0.995?"At the high":last<=lo50*1.005?"At the low":Math.abs(offH).toFixed(0)+"% below high",last>=hi50*0.995?1.5:last<=lo50*1.005?-1.5:0,1,last>=hi50*0.995?"Breaking out to a 50-day high. Breakouts in the direction of the trend tend to follow through.":last<=lo50*1.005?"Breaking down to a 50-day low: the last support level has given way.":"Resistance near "+hi50.toFixed(2)+" (50-day high), support near "+lo50.toFixed(2)+" (50-day low), "+offL.toFixed(0)+"% below the price."); }
+  // Volume (Elder's Force Index, Murphy's volume confirmation, Shannon's VWAP)
+  let atr=null, atrEst=false;
+  { const hm={}; (X.hlv||[]).forEach(r=>{ if(r&&isFinite(+r[1])&&isFinite(+r[2])&&isFinite(+r[3])) hm[r[0]]=[+r[1],+r[2],+r[3]]; });
+    const vr=[]; for(let i=n-1;i>=1;i--){ const h=hm[rows[i].d]; if(!h) break; vr.unshift({c:c[i],pc:c[i-1],h:h[0],l:h[1],v:h[2]}); }
+    const m=vr.length;
+    if(m>=30){
+      const fi=emaSeries(vr.map(r=>(r.c-r.pc)*r.v),13), f1=fi[m-1], f0=fi[m-2];
+      add("Volume","Force index (13)",f1>0?"Buyers stronger":"Sellers stronger",f1>0?(f1>=f0?1.5:0.5):(f1<=f0?-1.5:-0.5),1,f1>0?(f1>=f0?"Price gains are coming on heavier volume, and that pressure is building.":"Buyers still have the edge, but their push is fading."):(f1<=f0?"Price drops are coming on heavier volume, and that pressure is building.":"Sellers still have the edge, but their push is fading."));
+      let o=0; const obv=vr.map(r=>(o+=r.c>r.pc?r.v:r.c<r.pc?-r.v:0)), k=Math.min(20,m-1), ou=obv[m-1]>obv[m-1-k], pu=vr[m-1].c>vr[m-1-k].c;
+      add("Volume","Volume confirms the move",pu?(ou?"Yes, rising":"No"):(ou?"Buying on dips":"Yes, falling"),pu?(ou?1:-1):(ou?0.5:-1),1,pu?(ou?"The price is up over the past month and volume is flowing in with it. Volume should confirm the trend.":"The price is up, but more volume is trading on down days. Rallies without volume often fail."):(ou?"The price is down, but more volume is trading on up days: someone is buying the dip.":"The price is down and volume is flowing out with it."));
+      let pv=0,vv=0; vr.forEach(r=>{ pv+=(r.h+r.l+r.c)/3*r.v; vv+=r.v; }); if(vv>0){ const vw=pv/vv, d=(last/vw-1)*100, mo=Math.round(m/21);
+        add("Volume","Average buyer's price, "+mo+" months (VWAP)",pct(d),d>0?1:-1,1,d>0?"The price is above what the average buyer paid over the past "+mo+" months ("+vw.toFixed(2)+"), so most recent buyers are in profit and less likely to sell.":"The price is below what the average buyer paid over the past "+mo+" months ("+vw.toFixed(2)+"), so many recent buyers are underwater and may sell into rallies."); }
+      if(m>=15){ let t=0; vr.slice(-14).forEach(r=>{ t+=Math.max(r.h-r.l,Math.abs(r.h-r.pc),Math.abs(r.l-r.pc)); }); atr=t/14; }
+    }
+    if(atr==null&&n>=15){ let t=0; for(let i=n-14;i<n;i++) t+=Math.abs(c[i]-c[i-1]); atr=t/14*1.4; atrEst=true; }
+  }
+  // Short sellers (FINRA short interest, reported twice a month)
+  { const sh=X.short; if(sh&&(isFinite(+sh.pctOut)||isFinite(+sh.dtc))){ const pc=isFinite(+sh.pctOut)?+sh.pctOut:null, dtc=isFinite(+sh.dtc)?+sh.dtc:null, lvl=pc!=null?(pc>=20?3:pc>=10?2:pc>=5?1:0):dtc!=null?(dtc>=8?3:dtc>=5?2:dtc>=2.5?1:0):null;
+      if(lvl!=null){ const rising=trendUp===true&&n>=21&&last/c[n-21]>1.05, val=[pc!=null?pc.toFixed(1)+"% of "+(sh.float?"float":"shares"):null,dtc!=null?dtc.toFixed(1)+" days to cover":null].filter(Boolean).join(" · "), asof=sh.date?" As of "+fmtDate(sh.date)+".":"";
+        add("Short sellers","Short interest",val,lvl===3?(rising?0.5:-1.5):lvl===2?(rising?0:-0.5):lvl===1?0:0.5,1,(lvl===3?(rising?"Heavily shorted and climbing. Short sellers may be forced to buy back (a squeeze), but moves like this reverse fast.":"A lot of money is betting against this stock. Heavily shorted stocks have lagged on average."):lvl===2?"An above-average number of investors are betting against it.":lvl===1?"A normal amount of short selling.":"Few investors are betting against it.")+asof); }
+      if(isFinite(+sh.changePct)){ const ch=+sh.changePct; add("Short sellers","Change in short interest",(ch>=0?"+":"")+ch.toFixed(0)+"%",ch>15?-1:ch<-15?1:0,0.5,ch>15?"Bets against the stock grew over the last two weeks.":ch<-15?"Short sellers have been closing their bets.":"Little change in short selling over the last two weeks."); } } }
   // Range & valuation
   const hi52=f.hi!=null?Math.max(f.hi,last):null, lo52=f.lo!=null?Math.min(f.lo,last):null;
   if(hi52!=null&&lo52!=null&&hi52>lo52){ const pos=(last-lo52)/(hi52-lo52)*100, off=(last/hi52-1)*100; add("Range","52-week position",pos.toFixed(0)+"% of range",pos>85?1:pos>60?0.5:pos>30?0:pos>15?-0.5:-1,0.5,"Price is "+Math.abs(off).toFixed(0)+"% below its 52-week high of "+hi52.toFixed(2)+"."); }
@@ -1068,9 +1179,10 @@ function technical(rows,fund){
   // scoring
   const scoreOf=list=>{ let num=0,den=0; list.forEach(i=>{ if(i.sig==null||!i.w) return; num+=i.w*i.sig; den+=i.w*2; }); return den?Math.round(clamp(50+50*num/den,1,99)):null; };
   const score=scoreOf(items), techScore=scoreOf(items.filter(i=>i.group!=="Valuation"&&i.group!=="Range"));
+  const lo50s=n>=50?Math.min(...c.slice(-50)):null;
   const verdict=score>=65?"Bullish":score>=55?"Leaning bullish":score>=45?"Neutral":score>=35?"Leaning bearish":"Bearish";
   const used=items.filter(i=>i.sig!=null&&i.w).length;
-  return {score,techScore,verdict,items,used,total:items.filter(i=>i.w).length,last,n,bb,s20:smaSeries(c,20),s50:smaSeries(c,50),rsi:r,c};
+  return {score,techScore,verdict,items,used,total:items.filter(i=>i.w).length,atr,atrEst,support:lo50s,short:X.short||null,last,n,bb,s20:smaSeries(c,20),s50:smaSeries(c,50),rsi:r,c};
 }
 function taChart(rows,ta,px){
   const W=640,H=230,P={l:46,r:10,t:12,b:22}, N=Math.min(120,ta.c.length), off=ta.c.length-N, sl=a=>a.slice(off), c=sl(ta.c), up=sl(ta.bb.up), lo=sl(ta.bb.lo), m20=sl(ta.s20), m50=sl(ta.s50), rs=rows.slice(off);
@@ -1082,7 +1194,7 @@ function taChart(rows,ta,px){
   const fmt=v=>v>=100?v.toFixed(0):v.toFixed(2); let g=""; for(let k=0;k<=3;k++){ const v=y0+(y1-y0)*k/3,y=Y(v); g+='<line x1="'+P.l+'" x2="'+(W-P.r)+'" y1="'+y.toFixed(1)+'" y2="'+y.toFixed(1)+'" stroke="var(--line)" stroke-width="1" opacity=".6"/><text x="'+(P.l-6)+'" y="'+(y+4).toFixed(1)+'" text-anchor="end">'+fmt(v)+'</text>'; }
   const dl=[0,N-1].map((i,k)=>'<text x="'+X(i).toFixed(1)+'" y="'+(H-5)+'" text-anchor="'+(k?"end":"start")+'">'+esc(fmtDate(rs[i].d))+'</text>').join("");
   const main='<svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Price with Bollinger Bands and moving averages">'+g+band+
-    (m50.some(x=>x!=null)?'<path d="'+path(m50)+'" fill="none" stroke="var(--flip)" stroke-width="1.6" stroke-dasharray="5 4"/>':'')+
+    (m50.some(x=>x!=null)?'<path d="'+path(m50)+'" fill="none" stroke="var(--ink-3)" stroke-width="1.6" stroke-dasharray="5 4"/>':'')+
     '<path d="'+path(m20)+'" fill="none" stroke="var(--brand)" stroke-width="1.4" stroke-dasharray="2 3"/>'+
     '<path d="'+path(c)+'" fill="none" stroke="var(--ink)" stroke-width="2.2" stroke-linejoin="round"/><circle cx="'+X(N-1).toFixed(1)+'" cy="'+Y(c[N-1]).toFixed(1)+'" r="4" fill="var(--ink)" stroke="var(--card)" stroke-width="2"/>'+dl+'</svg>';
   const RH=90, rv=sl(ta.rsi), RY=v=>8+(RH-16)*(1-v/100);
@@ -1090,26 +1202,26 @@ function taChart(rows,ta,px){
   const rsi='<svg viewBox="0 0 '+W+' '+RH+'" role="img" aria-label="RSI with 30 and 70 levels"><rect x="'+P.l+'" y="'+RY(70)+'" width="'+(W-P.l-P.r)+'" height="'+(RY(30)-RY(70))+'" fill="var(--fog)" opacity=".7"/>'+
     [30,70].map(v=>'<line x1="'+P.l+'" x2="'+(W-P.r)+'" y1="'+RY(v)+'" y2="'+RY(v)+'" stroke="var(--outline)" stroke-dasharray="3 3" stroke-width="1"/><text x="'+(P.l-6)+'" y="'+(RY(v)+4)+'" text-anchor="end">'+v+'</text>').join("")+
     '<path d="'+rpath+'" fill="none" stroke="var(--brand)" stroke-width="1.8"/></svg>';
-  return '<div class="chartwrap">'+main+'</div><div class="legend"><span><i style="background:var(--ink)"></i>Price</span><span><i style="background:var(--brand);opacity:.4;height:8px"></i>Bollinger Bands</span><span><i style="background:var(--brand)"></i>20-day</span>'+(m50.some(x=>x!=null)?'<span><i style="background:var(--flip)"></i>50-day</span>':'')+'</div>'+
+  return '<div class="chartwrap">'+main+'</div><div class="legend"><span><i style="background:var(--ink)"></i>Price</span><span><i style="background:var(--brand);opacity:.4;height:8px"></i>Bollinger Bands</span><span><i style="background:var(--brand)"></i>20-day</span>'+(m50.some(x=>x!=null)?'<span><i style="background:var(--ink-3)"></i>50-day</span>':'')+'</div>'+
     '<div class="sechead" style="margin-top:4px"><span class="sub" style="font-weight:600">RSI (14)</span><span class="sub">'+(rv[N-1]!=null?rv[N-1].toFixed(0):"–")+'</span></div><div class="chartwrap">'+rsi+'</div>';
 }
 function taReport(t,rows,src){
-  const ta=technical(rows,fundOf(t)); if(ta.score==null) return '<p class="sub">Not enough price history to analyze yet.</p>';
-  const tone=ta.score>=55?"strong":ta.score>=45?"flip":"weak";
+  const ta=technical(rows,fundOf(t),extOf(t)); if(ta.score==null) return '<p class="sub">Not enough price history to analyze yet.</p>';
+  const tone=techTone(ta.score);
   const scored=ta.items.filter(i=>i.sig!=null&&i.w).sort((a,b)=>b.sig*b.w-a.sig*a.w);
   const pros=scored.filter(i=>i.sig>0).slice(0,2), cons=scored.filter(i=>i.sig<0).slice(-2).reverse();
-  const groups=["Trend","Momentum","Volatility","Range","Valuation"];
+  const groups=["Timeframes","Trend","Momentum","Volume","Levels","Short sellers","Volatility","Range","Valuation"];
   const rowsHTML=groups.map(gname=>{ const its=ta.items.filter(i=>i.group===gname); if(!its.length) return "";
-    return '<div class="tagroup"><h4>'+gname+'</h4>'+its.map(i=>{ const [lbl,col]=i.sig==null?["No data","flip"]:i.w?SIG(i.sig):["Info","flip"];
+    return '<div class="tagroup"><h4>'+gname+'</h4>'+its.map(i=>{ const [lbl,col]=i.sig==null?["No data","neutral"]:i.w?SIG(i.sig):["Info","neutral"];
       return '<div class="tarow"><div class="taname"><b>'+esc(i.name)+'</b><span class="num">'+esc(i.value)+'</span></div>'+
       (i.sig==null||!i.w?'<span class="verdict" style="background:var(--fog);color:var(--ink-2)">'+lbl+'</span>':'<span class="verdict v-'+col+'"><i></i>'+lbl+'</span>')+
       '<p class="sub">'+esc(i.note)+'</p></div>'; }).join("")+'</div>'; }).join("");
   return '<div class="ta">'+
-    '<div class="hero">'+dial(ta.score,104,10).replace("chance up","out of 100").replace(">%</span>","></span>")+'<div style="display:grid;gap:8px"><span class="verdict v-'+tone+'" style="justify-self:start;height:28px;font-size:13px"><i></i>'+ta.verdict+'</span>'+
+    '<div class="hero">'+dial(ta.score,104,10,tone).replace("chance up","out of 100").replace(">%</span>","></span>")+'<div style="display:grid;gap:8px"><span class="verdict v-'+tone+'" style="justify-self:start;height:28px;font-size:13px"><i></i>'+ta.verdict+'</span>'+
     '<p class="sub">'+ta.used+' of '+ta.total+' signals scored from '+ta.n+' days of prices through '+esc(fmtDate(rows[rows.length-1].d))+(src?' ('+esc(src)+')':'')+'.</p></div></div>'+
     ((pros.length||cons.length)?'<div class="tasum">'+(pros.length?'<div class="blk bull"><h3>Working for it</h3><p>'+pros.map(i=>esc(i.name)+" ("+esc(i.value)+")").join(", ")+'</p></div>':'')+(cons.length?'<div class="blk bear"><h3>Working against it</h3><p>'+cons.map(i=>esc(i.name)+" ("+esc(i.value)+")").join(", ")+'</p></div>':'')+'</div>':'')+
     taChart(rows,ta)+rowsHTML+
-    '<p class="sub">How the score works: each signal earns −2 to +2 points, weighted by how much it usually matters (the 200-day trend counts most). 50 is neutral. Signals that need more history are skipped until enough daily prices build up. Technical signals describe past price behavior and don\'t guarantee what happens next.</p></div>';
+    '<p class="sub">How the score works: each signal earns −2 to +2 points, weighted by how much it usually matters (the weekly and 200-day trends count most). 50 is neutral. The rules come from standard technical-analysis texts: Murphy (trend, levels, volume), Elder (Triple Screen, Impulse, Force Index) and Shannon (timeframes, VWAP). Signals that need more history are skipped until enough daily prices build up. Technical signals describe past price behavior and don\'t guarantee what happens next.</p></div>';
 }
 
 function drawChart(rows,a,px){
@@ -1126,11 +1238,11 @@ function drawChart(rows,a,px){
   const area=path(c)+"L"+X(c.length-1).toFixed(1)+" "+(H-P.b)+"L"+X(0).toFixed(1)+" "+(H-P.b)+"Z";
   return {html:'<div class="chartwrap" id="'+px+'cw"><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="Price over the last '+c.length+' trading days with 20 and 50 day averages">'+
     '<defs><linearGradient id="'+px+'gf" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="'+col+'" stop-opacity=".22"/><stop offset="1" stop-color="'+col+'" stop-opacity="0"/></linearGradient></defs>'+g+
-    '<path d="'+area+'" fill="url(#'+px+'gf)"/><path d="'+path(m50)+'" fill="none" stroke="var(--flip)" stroke-width="1.6" stroke-dasharray="5 4"/><path d="'+path(m20)+'" fill="none" stroke="var(--brand)" stroke-width="1.6"/>'+
+    '<path d="'+area+'" fill="url(#'+px+'gf)"/><path d="'+path(m50)+'" fill="none" stroke="var(--ink-3)" stroke-width="1.6" stroke-dasharray="5 4"/><path d="'+path(m20)+'" fill="none" stroke="var(--brand)" stroke-width="1.6"/>'+
     '<path d="'+path(c)+'" fill="none" stroke="'+col+'" stroke-width="2.4" stroke-linejoin="round"/>'+
     '<circle cx="'+X(c.length-1).toFixed(1)+'" cy="'+Y(c[c.length-1]).toFixed(1)+'" r="4.5" fill="'+col+'" stroke="var(--card)" stroke-width="2"/>'+
     '<line id="'+px+'cx" y1="'+P.t+'" y2="'+(H-P.b)+'" stroke="var(--ink-2)" stroke-width="1" visibility="hidden"/><circle id="'+px+'cd" r="5" fill="'+col+'" stroke="var(--card)" stroke-width="2" visibility="hidden"/>'+dl+'</svg><div class="tip" id="'+px+'tip" hidden></div></div>'+
-    '<div class="legend"><span><i style="background:'+col+'"></i>Price</span><span><i style="background:var(--brand)"></i>20-day average</span>'+(m50.some(x=>x!=null)?'<span><i style="background:var(--flip)"></i>50-day average</span>':'')+'</div>',
+    '<div class="legend"><span><i style="background:'+col+'"></i>Price</span><span><i style="background:var(--brand)"></i>20-day average</span>'+(m50.some(x=>x!=null)?'<span><i style="background:var(--ink-3)"></i>50-day average</span>':'')+'</div>',
     hook(){ const cw=$(px+"cw"); if(!cw) return; const svg=cw.querySelector("svg"), tip=$(px+"tip"), cx=$(px+"cx"), cd=$(px+"cd");
       const move=ev=>{ const r=svg.getBoundingClientRect(), pt=(ev.touches?ev.touches[0]:ev), sx=(pt.clientX-r.left)/r.width*W;
         const i=Math.round(clamp((sx-P.l)/(W-P.l-P.r),0,1)*(c.length-1)), x=X(i), y=Y(c[i]);
@@ -1152,7 +1264,7 @@ function runLab(txt,saved){
     else if(t){ const tmp={t,scores:{buzz:50,analyst:50,fund:50,momentum:a.score},flags:[]}; note+='<div class="blk plain" style="border-radius:14px;padding:12px 14px"><p><b>'+esc(t)+'</b> isn\'t on this week\'s list, so this reads the chart only: <b>'+prob(tmp,"sw")+'%</b> for 1–4 weeks. Buzz, analysts and the business aren\'t included.</p></div>'; }
     const out=$("clOut"); out.hidden=false;
     out.innerHTML='<div class="hero">'+dial(a.score,96,9)+'<div style="display:grid;gap:6px"><div class="sub">Chart score</div><div style="font-weight:700;font-size:20px;line-height:1.15">'+trend+'</div>'+
-      (a.r14>70?'<span class="verdict v-flip"><i></i>Running hot (RSI '+a.r14.toFixed(0)+')</span>':a.r14<30?'<span class="verdict v-flip"><i></i>Oversold (RSI '+a.r14.toFixed(0)+')</span>':'')+'</div></div>'+
+      (a.r14>70?'<span class="verdict v-neutral"><i></i>Running hot (RSI '+a.r14.toFixed(0)+')</span>':a.r14<30?'<span class="verdict v-neutral"><i></i>Oversold (RSI '+a.r14.toFixed(0)+')</span>':'')+'</div></div>'+
       ch.html+'<button class="btn primary" id="labTAbtn" type="button" aria-expanded="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 19h16M6 16l4-5 3 3 5-7"/></svg><span>Technical analysis</span></button><div id="labTA" hidden></div>'+
       '<div class="statgrid"><div class="stat"><span>Last price</span><b>'+(a.last>=100?a.last.toFixed(2):a.last.toFixed(3))+'</b></div>'+
       '<div class="stat"><span>Past month</span><b style="color:var(--'+(a.ret20>=0?"strong":"weak")+')">'+pct(a.ret20)+'</b></div>'+

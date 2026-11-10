@@ -42,6 +42,16 @@ def main():
                 fails.append(f"{futs[f]}: {err}")
             if i % 250 == 0:
                 print(f"{i}/{len(ts)} done, {len(fails)} failed, {time.time()-t0:.0f}s")
+    # second, slower pass for anything that failed (usually rate limiting)
+    retry, fails = [f.split(":")[0] for f in fails], []
+    for t in retry:
+        time.sleep(1.5)
+        try:
+            err = one(t, out, now)
+        except Exception as e:
+            err = str(e)[:80]
+        if err:
+            fails.append(f"{t}: {err}")
     print(f"{len(ts)-len(fails)} written, {len(fails)} failed"); print("\n".join(fails[:40]))
     if len(fails) > 0.3 * len(ts):
         sys.exit("Too many failures; not publishing.")
