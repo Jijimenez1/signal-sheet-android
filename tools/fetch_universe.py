@@ -71,6 +71,9 @@ def screener():
     return out
 
 
+HLV = {}
+
+
 def history(t, etf):
     start = (dt.date.today() - dt.timedelta(days=430)).isoformat()
     for cls in (("etf", "stocks") if etf else ("stocks", "etf")):
@@ -83,11 +86,15 @@ def history(t, etf):
             try:
                 m, d, y = r["date"].split("/")
                 rows[f"{y}-{m}-{d}"] = round(num(r["close"]), 4)
+                HLV.setdefault(t, {})[f"{y}-{m}-{d}"] = [round(num(r["high"]), 4), round(num(r["low"]), 4), int(num(r["volume"]))]
             except (ValueError, KeyError):
                 pass
         if rows:
             return sorted(rows.items())
     return None
+
+
+SHORT = None  # set in main: ticker -> short-interest record
 
 
 def one(t, name, etf, out, now, scr=None):
@@ -111,6 +118,13 @@ def one(t, name, etf, out, now, scr=None):
     quote, rows = make_quote(rows[-KEEP:], live, now)
     doc = {"t": t, "name": name, "source": "Nasdaq", "rows": [[d, round(c, 4)] for d, c in rows[-KEEP:]], "quote": quote,
            "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+    m = HLV.pop(t, None) or {}
+    hl = [[d] + m[d] for d, _ in rows[-130:] if d in m]
+    if hl:
+        doc["hlv"] = hl
+    sh = SHORT(t) if SHORT else None
+    if sh:
+        doc["short"] = sh
     (out / "px" / f"{t}.json").write_text(json.dumps(doc, separators=(",", ":")))
     return t, None
 
@@ -128,6 +142,14 @@ def main():
     jobs = [(t, n, True, None) for t, n in ETFS.items()] + [(t, v[0], False, v[2:]) for t, v in items if t not in ETFS]
     if limit:
         jobs = jobs[:limit]
+    global SHORT
+    try:
+        import extras
+        finra, shares = extras.finra_short(), extras.shares_outstanding()
+        print(f"short interest: {len(finra)} symbols")
+        SHORT = lambda t: extras.short_for(t, finra, shares)
+    except Exception as e:
+        print("short interest skipped:", str(e)[:120])
     names, fails = {}, []
     t0 = time.time()
     with ThreadPoolExecutor(max_workers=6) as ex:

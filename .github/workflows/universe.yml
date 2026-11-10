@@ -14,7 +14,7 @@ on:
         default: "0"
   push:
     branches: [main]
-    paths: [".github/workflows/universe.yml", "tools/fetch_universe.py"]
+    paths: [".github/workflows/universe.yml", "tools/fetch_universe.py", "tools/extras.py"]
 
 permissions:
   contents: write

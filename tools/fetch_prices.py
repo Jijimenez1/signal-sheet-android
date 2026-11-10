@@ -15,6 +15,7 @@ After the 4 PM close, the regular closing price is used and recorded as today's 
 import csv, datetime as dt, io, json, pathlib, re, sys, time, urllib.request
 from zoneinfo import ZoneInfo
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 APP = ROOT / "docs/data/app.json"
 OUT = ROOT / "docs/data/history.json"
@@ -71,9 +72,22 @@ def nasdaq(t):
         for r in ((j.get("data") or {}).get("tradesTable") or {}).get("rows") or []:
             m, d, y = r["date"].split("/")
             rows[f"{y}-{m}-{d}"] = round(num(r["close"]), 4)
+            try:  # highs, lows and volume feed the volume and risk signals
+                HLV.setdefault(t, {})[f"{y}-{m}-{d}"] = [round(num(r["high"]), 4), round(num(r["low"]), 4), int(num(r["volume"]))]
+            except (ValueError, KeyError):
+                pass
         if rows:
             return sorted(rows.items())
     raise RuntimeError("nasdaq: no rows")
+
+
+HLV = {}  # ticker -> {date: [high, low, volume]} from the Nasdaq history
+HLV_KEEP = 130
+
+
+def hlv_rows(t, rows):
+    m = HLV.get(t) or {}
+    return [[d] + m[d] for d, _ in rows[-HLV_KEEP:] if d in m]
 
 
 SOURCES = [("Nasdaq", nasdaq), ("Yahoo Finance", yahoo), ("Stooq", stooq)]  # Nasdaq first: the others block GitHub runners
@@ -190,10 +204,56 @@ def tickers_from_app():
     return ts
 
 
+LONG = ROOT / "docs/data/long.json"
+LONG_DAYS = 3  # refresh each ticker's all-time series this often
+
+
+def update_long(tickers, last_close, report):
+    """All-time history for the public tickers (docs/data/long.json); only stale or missing ones are fetched."""
+    try:
+        import extras
+        cur = json.loads(LONG.read_text()).get("tickers", {}) if LONG.exists() else {}
+        now = dt.datetime.now(dt.timezone.utc)
+        out, changed = {}, False
+        for t in sorted(tickers):
+            old = cur.get(t)
+            age = (now - dt.datetime.fromisoformat(old["fetched"].replace("Z", "+00:00"))).days if old and old.get("fetched") else 99
+            if old and age < LONG_DAYS:
+                out[t] = old
+                continue
+            rows = extras.long_history(t, last_close.get(t), etf=(t == "SPY"))
+            if rows:
+                out[t] = {"t": t, "source": "StockAnalysis", "rows": rows, "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+                changed = True
+                report.append(f"{t}: all-time history, {len(rows)} points since {rows[0][0]}")
+            elif old:
+                out[t] = old
+            else:
+                report.append(f"{t}: no all-time history")
+            time.sleep(0.4)
+        if changed or set(out) != set(cur):
+            LONG.write_text(json.dumps({"updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "tickers": out}, separators=(",", ":")))
+            report.append(f"wrote long.json: {len(out)} tickers, {LONG.stat().st_size} bytes")
+    except Exception as e:  # never let the extras break the price feed
+        report.append(f"all-time history skipped: {str(e)[:120]}")
+
+
+def short_data(report):
+    try:
+        import extras
+        finra, shares = extras.finra_short(), extras.shares_outstanding()
+        report.append(f"short interest: {len(finra)} symbols, shares outstanding for {len(shares)}")
+        return lambda t: extras.short_for(t, finra, shares)
+    except Exception as e:
+        report.append(f"short interest skipped: {str(e)[:120]}")
+        return lambda t: None
+
+
 def main():
     old = json.loads(OUT.read_text()).get("tickers", {}) if OUT.exists() else {}
     out, report = {}, []
     now = dt.datetime.now(dt.timezone.utc)
+    short_of = short_data(report)
     for t in sorted(tickers_from_app()):
         name, rows = history(t, report)
         if not rows:
@@ -205,6 +265,12 @@ def main():
         quote, rows = make_quote(rows[-KEEP:], live)
         report.append(f"{t}: nasdaq quote {live}")
         out[t] = {"t": t, "source": name, "rows": [[d, c] for d, c in rows[-KEEP:]], "quote": quote, "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
+        hl = hlv_rows(t, rows)
+        if hl:
+            out[t]["hlv"] = hl
+        sh = short_of(t) or (old.get(t) or {}).get("short")
+        if sh:
+            out[t]["short"] = sh
         report.append(f"{t}: {name}, {len(rows)} days through {rows[-1][0]}, {quote['price']:.2f} {quote['changePct']:+.2f}% ({quote['asOf']})")
         time.sleep(0.3)
     print("\n".join(report))
@@ -212,6 +278,9 @@ def main():
         sys.exit("No prices fetched from any source; leaving history.json unchanged.")
     OUT.write_text(json.dumps({"updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "tickers": out}, separators=(",", ":")))
     print(f"wrote {OUT.relative_to(ROOT)}: {len(out)} tickers, {OUT.stat().st_size} bytes")
+    report = []
+    update_long(out.keys(), {t: x["rows"][-1][1] for t, x in out.items() if x.get("rows")}, report)
+    print("\n".join(report))
 
 
 if __name__ == "__main__":

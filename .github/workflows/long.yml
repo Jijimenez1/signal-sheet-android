@@ -1,0 +1,44 @@
+name: Update all-time history
+
+# Weekly: all-time price history for every stock in the universe, published to the orphan
+# "long" branch (force-pushed, so the repo never grows). Saturdays, about 5 AM New York time.
+on:
+  schedule:
+    - cron: "23 10 * * 6"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: [".github/workflows/long.yml", "tools/fetch_long.py"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: long-history
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Get the universe list
+        run: |
+          git fetch --depth 1 origin data
+          git show FETCH_HEAD:universe.json > "$RUNNER_TEMP/universe.json"
+      - name: Fetch all-time history
+        run: python3 tools/fetch_long.py "$RUNNER_TEMP/universe.json" "$RUNNER_TEMP/l"
+      - name: Publish long branch
+        run: |
+          cd "$RUNNER_TEMP/l"
+          git init -q -b long
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "All-time history $(date -u +%F)"
+          git push -qf "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" long:long
+          echo "published $(ls long | wc -l) files, $(du -sh long | cut -f1)"
