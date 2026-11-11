@@ -4,7 +4,8 @@ Runs on GitHub Actions (see .github/workflows/prices.yml), which has normal inte
 Reads the ticker list from docs/data/app.json (this week's picks + Strong buys) and writes
 docs/data/history.json. The owner's private watchlist is never read or written here.
 
-History sources, tried in order per ticker: Nasdaq API, Yahoo Finance chart API, Stooq CSV.
+History sources, tried in order per ticker: Nasdaq API, StockAnalysis, Cboe, Yahoo Finance.
+A source that answers "blocked" (HTTP 403/429) is skipped for the rest of the run.
 Each result is checked before it is kept: at least 20 daily closes, the newest within
 10 days, and no zero or negative prices. A ticker that fails keeps its previous data.
 
@@ -12,7 +13,7 @@ The quote ("Today" change) is always computed here from the previous regular-ses
 never taken from a source's own change field, so after-hours moves can't leak into "Today".
 After the 4 PM close, the regular closing price is used and recorded as today's daily close.
 """
-import csv, datetime as dt, io, json, pathlib, re, sys, time, urllib.request
+import csv, datetime as dt, io, json, pathlib, re, sys, time, urllib.error, urllib.request
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -64,6 +65,77 @@ def stooq(t):
     return sorted(rows.items())
 
 
+BLOCKED = set()  # sources that refused us this run (HTTP 403/429): skipped for the rest of the run
+
+
+def guard(name):
+    """Decorator: once a source blocks us, stop calling it for the rest of the run."""
+    def wrap(fn):
+        def inner(*a, **k):
+            if name in BLOCKED:
+                raise RuntimeError(f"{name}: skipped (blocked earlier this run)")
+            try:
+                return fn(*a, **k)
+            except urllib.error.HTTPError as e:
+                if e.code in (403, 429):
+                    BLOCKED.add(name)
+                raise
+        return inner
+    return wrap
+
+
+SA_KIND = {}  # ticker -> "s" (stock) or "e" (ETF) on StockAnalysis
+
+
+def sa_get(t, path):
+    kinds = [SA_KIND[t]] if t in SA_KIND else (["e", "s"] if t in ("SPY", "QQQ", "VOO") else ["s", "e"])
+    err = None
+    for k in kinds:
+        try:
+            j = json.loads(get(f"https://stockanalysis.com/api/{path.format(k=k, t=t)}", {"Accept": "application/json"}))
+            if j.get("data"):
+                SA_KIND[t] = k
+                return j["data"]
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429):
+                raise
+            err = e
+    raise RuntimeError(f"stockanalysis: {err or 'no data'}")
+
+
+@guard("stockanalysis")
+def stockanalysis(t):
+    """A year of daily candles from StockAnalysis (closes plus highs, lows and volume)."""
+    rows = {}
+    for p in sa_get(t, "charts/{k}/{t}/1Y/c"):
+        if p.get("c") is None:
+            continue
+        d = (dt.datetime(1970, 1, 1) + dt.timedelta(seconds=int(p["t"]))).date().isoformat()
+        rows[d] = round(float(p["c"]), 4)
+        if p.get("h") is not None and p.get("l") is not None and p.get("v") is not None:
+            HLV.setdefault(t, {})[d] = [round(float(p["h"]), 4), round(float(p["l"]), 4), int(p["v"])]
+    if not rows:
+        raise RuntimeError("stockanalysis: no rows")
+    return sorted(rows.items())
+
+
+@guard("cboe")
+def cboe(t):
+    j = json.loads(get(f"https://cdn.cboe.com/api/global/delayed_quotes/charts/historical/{t}.json"))
+    rows = {}
+    for p in (j.get("data") or [])[-320:]:
+        if p.get("close"):
+            rows[p["date"]] = round(float(p["close"]), 4)
+            try:
+                HLV.setdefault(t, {})[p["date"]] = [round(float(p["high"]), 4), round(float(p["low"]), 4), int(float(p["volume"]))]
+            except (KeyError, TypeError, ValueError):
+                pass
+    if not rows:
+        raise RuntimeError("cboe: no rows")
+    return sorted(rows.items())
+
+
+@guard("nasdaq")
 def nasdaq(t):
     start = (dt.date.today() - dt.timedelta(days=430)).isoformat()
     for cls in ("stocks", "etf"):
@@ -90,7 +162,8 @@ def hlv_rows(t, rows):
     return [[d] + m[d] for d, _ in rows[-HLV_KEEP:] if d in m]
 
 
-SOURCES = [("Nasdaq", nasdaq), ("Yahoo Finance", yahoo), ("Stooq", stooq)]  # Nasdaq first: the others block GitHub runners
+# Nasdaq first; it sometimes blocks GitHub's servers for hours, so StockAnalysis and Cboe back it up.
+SOURCES = [("Nasdaq", nasdaq), ("StockAnalysis", stockanalysis), ("Cboe", cboe), ("Yahoo Finance", guard("yahoo")(yahoo))]
 
 
 def valid(rows):
@@ -130,6 +203,33 @@ def session(now=None):
     return d.isoformat(), False
 
 
+def sa_quote(t):
+    """Regular-session price from StockAnalysis: (price, status, stamp) or None."""
+    try:
+        if "stockanalysis" in BLOCKED:
+            return None
+        d = sa_get(t, "quotes/{k}/{t}")
+        p = d.get("p")
+        if not p or p <= 0:
+            return None
+        return float(p), ("Open" if d.get("ms") == "open" else "Closed"), (d.get("u") or "").replace(" EST", " ET").replace(" EDT", " ET").replace(", 20", ", 20")
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 429):
+            BLOCKED.add("stockanalysis")
+        return None
+    except Exception:
+        return None
+
+
+def live_quote(t):
+    """Nasdaq first, StockAnalysis when Nasdaq has nothing. Returns ((price, status, stamp), source) or (None, None)."""
+    q = nasdaq_regular(t) if "nasdaq" not in BLOCKED else None
+    if q:
+        return q, "Nasdaq"
+    q = sa_quote(t)
+    return (q, "StockAnalysis") if q else (None, None)
+
+
 def nasdaq_regular(t):
     """Latest regular-session price from Nasdaq: live during the session, the official close after it.
     Returns (price, status, stamp) or None."""
@@ -150,6 +250,10 @@ def nasdaq_regular(t):
             if src.get("lastSalePrice"):
                 stamp = (src.get("lastTradeTimestamp") or "").replace("DATA AS OF", "").replace("Closed at", "").strip()
                 return num(src["lastSalePrice"]), status, stamp
+        except urllib.error.HTTPError as e:
+            if e.code in (403, 429):
+                BLOCKED.add("nasdaq")
+                return None
         except Exception:
             pass
     return None
@@ -166,7 +270,7 @@ def stamp_date(stamp):
         return None
 
 
-def make_quote(rows, live, now=None):
+def make_quote(rows, live, now=None, source="Nasdaq"):
     """rows: [(date, close)] oldest first. Returns (quote, rows) with today's close appended after the bell."""
     sdate, is_open = session(now)
     sd = stamp_date(live[2]) if live else None
@@ -177,7 +281,7 @@ def make_quote(rows, live, now=None):
     rows = list(rows)
     price, stamp, src = rows[-1][1], dt.date.fromisoformat(rows[-1][0]).strftime("%b %-d") + " close", None
     if live and live[0] > 0 and abs(live[0] / rows[-1][1] - 1) < 0.35:  # sanity check against the last close
-        price, src = live[0], "Nasdaq"
+        price, src = live[0], source
         if is_open:
             stamp = (live[2] or "").strip() or "live"
         else:
@@ -241,7 +345,11 @@ def update_long(tickers, last_close, report):
 def short_data(report):
     try:
         import extras
-        finra, shares = extras.finra_short(), extras.shares_outstanding()
+        finra = extras.finra_short()
+        try:
+            shares = extras.shares_outstanding()
+        except Exception:
+            shares = {}
         report.append(f"short interest: {len(finra)} symbols, shares outstanding for {len(shares)}")
         return lambda t: extras.short_for(t, finra, shares)
     except Exception as e:
@@ -249,39 +357,52 @@ def short_data(report):
         return lambda t: None
 
 
-def main():
+def main(quick=False):
+    """quick=True refreshes only the live quotes (used between full runs during market hours)."""
     old = json.loads(OUT.read_text()).get("tickers", {}) if OUT.exists() else {}
     out, report = {}, []
     now = dt.datetime.now(dt.timezone.utc)
-    short_of = short_data(report)
+    short_of = (lambda t: None) if quick else short_data(report)
     for t in sorted(tickers_from_app()):
-        name, rows = history(t, report)
+        prev = old.get(t) or {}
+        fresh = quick and prev.get("rows") and (dt.date.today() - dt.date.fromisoformat(prev["rows"][-1][0])).days <= 5
+        if fresh:  # quotes-only pass: reuse the stored daily history
+            name, rows = prev.get("source", ""), [(d, c) for d, c in prev["rows"]]
+            # drop a close we appended ourselves for a session that is still running
+            if rows and rows[-1][0] == session(now)[0] and session(now)[1]:
+                rows = rows[:-1]
+        else:
+            name, rows = history(t, report)
         if not rows:
-            if t in old:
-                out[t] = old[t]
+            if prev:
+                out[t] = prev
                 report.append(f"{t}: kept previous data")
             continue
-        live = nasdaq_regular(t)
-        quote, rows = make_quote(rows[-KEEP:], live)
-        report.append(f"{t}: nasdaq quote {live}")
+        live, qsrc = live_quote(t)
+        quote, rows = make_quote(rows[-KEEP:], live, source=qsrc or "Nasdaq")
         out[t] = {"t": t, "source": name, "rows": [[d, c] for d, c in rows[-KEEP:]], "quote": quote, "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
-        hl = hlv_rows(t, rows)
+        hl = prev.get("hlv") if fresh else hlv_rows(t, rows)
         if hl:
             out[t]["hlv"] = hl
-        sh = short_of(t) or (old.get(t) or {}).get("short")
+        sh = short_of(t) or prev.get("short")
         if sh:
             out[t]["short"] = sh
         report.append(f"{t}: {name}, {len(rows)} days through {rows[-1][0]}, {quote['price']:.2f} {quote['changePct']:+.2f}% ({quote['asOf']})")
         time.sleep(0.3)
-    print("\n".join(report))
+    print("\n".join(r for r in report if not quick or "failed" in r or "kept" in r))
+    if BLOCKED:
+        print("blocked this run:", ", ".join(sorted(BLOCKED)))
     if not out:
-        sys.exit("No prices fetched from any source; leaving history.json unchanged.")
+        print("No prices fetched from any source; leaving history.json unchanged.")
+        return
     OUT.write_text(json.dumps({"updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "tickers": out}, separators=(",", ":")))
     print(f"wrote {OUT.relative_to(ROOT)}: {len(out)} tickers, {OUT.stat().st_size} bytes")
+    if quick:
+        return
     report = []
     update_long(out.keys(), {t: x["rows"][-1][1] for t, x in out.items() if x.get("rows")}, report)
     print("\n".join(report))
 
 
 if __name__ == "__main__":
-    main()
+    main(quick="--quotes" in sys.argv)

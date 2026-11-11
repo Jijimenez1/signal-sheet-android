@@ -71,26 +71,20 @@ def screener():
     return out
 
 
-HLV = {}
+import fetch_prices as fp  # noqa: E402
+
+HLV = fp.HLV  # highs/lows/volume collected by the history sources
 
 
 def history(t, etf):
-    start = (dt.date.today() - dt.timedelta(days=430)).isoformat()
-    for cls in (("etf", "stocks") if etf else ("stocks", "etf")):
+    """Daily closes: Nasdaq first, StockAnalysis when Nasdaq is blocking GitHub's servers."""
+    for fn in (fp.nasdaq, fp.stockanalysis):
         try:
-            j = json.loads(get(f"https://api.nasdaq.com/api/quote/{t}/historical?assetclass={cls}&fromdate={start}&limit=9999", NQ))
+            rows = fn(t)
+            if rows:
+                return rows
         except Exception:
             continue
-        rows = {}
-        for r in ((j.get("data") or {}).get("tradesTable") or {}).get("rows") or []:
-            try:
-                m, d, y = r["date"].split("/")
-                rows[f"{y}-{m}-{d}"] = round(num(r["close"]), 4)
-                HLV.setdefault(t, {})[f"{y}-{m}-{d}"] = [round(num(r["high"]), 4), round(num(r["low"]), 4), int(num(r["volume"]))]
-            except (ValueError, KeyError):
-                pass
-        if rows:
-            return sorted(rows.items())
     return None
 
 
@@ -114,7 +108,7 @@ def one(t, name, etf, out, now, scr=None):
         if abs((scr[0] - scr[1]) / rows[-1][1] - 1) < 0.005 or abs(scr[0] / rows[-1][1] - 1) < 1e-9:
             live = (scr[0], "Closed", "")
     elif etf:
-        live = nasdaq_regular(t)
+        live = fp.live_quote(t)[0]
     quote, rows = make_quote(rows[-KEEP:], live, now)
     doc = {"t": t, "name": name, "source": "Nasdaq", "rows": [[d, round(c, 4)] for d, c in rows[-KEEP:]], "quote": quote,
            "fetched": now.strftime("%Y-%m-%dT%H:%M:%SZ")}
@@ -134,25 +128,41 @@ def main():
     (out / "px").mkdir(parents=True, exist_ok=True)
     limit = int(sys.argv[2]) if len(sys.argv) > 2 else 0
     now = dt.datetime.now(dt.timezone.utc)
-    stocks = screener()
-    print(f"screener: {len(stocks)} stocks with market cap >= ${MIN_CAP/1e9:.0f}B")
-    if len(stocks) < 200:
-        sys.exit("Screener returned too few stocks; not publishing.")
-    items = sorted(stocks.items(), key=lambda kv: -kv[1][1])
-    jobs = [(t, n, True, None) for t, n in ETFS.items()] + [(t, v[0], False, v[2:]) for t, v in items if t not in ETFS]
+    try:
+        stocks = screener()
+        print(f"screener: {len(stocks)} stocks with market cap >= ${MIN_CAP/1e9:.0f}B")
+    except Exception as e:
+        stocks = {}
+        print("screener unavailable:", str(e)[:100])
+    if len(stocks) >= 200:
+        items = sorted(stocks.items(), key=lambda kv: -kv[1][1])
+        jobs = [(t, n, True, None) for t, n in ETFS.items()] + [(t, v[0], False, v[2:]) for t, v in items if t not in ETFS]
+    else:
+        # Nasdaq's list is unavailable: keep yesterday's list of tickers and refresh their prices from the backup source
+        prev = pathlib.Path(sys.argv[3]) if len(sys.argv) > 3 else None
+        old = json.loads(prev.read_text()).get("tickers", {}) if prev and prev.exists() and prev.stat().st_size > 10 else {}
+        if len(old) < 200:
+            print("No ticker list available; leaving the published data as it is.")
+            return
+        print(f"using the previous list of {len(old)} tickers")
+        jobs = [(t, n, t in ETFS, None) for t, n in old.items()]
     if limit:
         jobs = jobs[:limit]
     global SHORT
     try:
         import extras
-        finra, shares = extras.finra_short(), extras.shares_outstanding()
+        finra = extras.finra_short()
+        try:
+            shares = extras.shares_outstanding()
+        except Exception:
+            shares = {}
         print(f"short interest: {len(finra)} symbols")
         SHORT = lambda t: extras.short_for(t, finra, shares)
     except Exception as e:
         print("short interest skipped:", str(e)[:120])
     names, fails = {}, []
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=6) as ex:
+    with ThreadPoolExecutor(max_workers=4) as ex:
         futs = {ex.submit(one, t, n, e, out, now, sc): (t, n) for t, n, e, sc in jobs}
         for i, f in enumerate(as_completed(futs), 1):
             t, n = futs[f]
@@ -168,8 +178,11 @@ def main():
                 print(f"{i}/{len(jobs)} done, {len(fails)} failed, {time.time()-t0:.0f}s")
     print(f"{len(names)} tickers written, {len(fails)} failed")
     print("\n".join(fails[:60]))
+    if fp.BLOCKED:
+        print("blocked this run:", ", ".join(sorted(fp.BLOCKED)))
     if len(names) < 0.8 * len(jobs):
-        sys.exit("Too many failures; not publishing.")
+        print("Too many failures; leaving the published data as it is.")
+        return
     (out / "universe.json").write_text(json.dumps({"updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "tickers": dict(sorted(names.items()))}, separators=(",", ":")))
 
 

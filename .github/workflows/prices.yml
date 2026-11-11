@@ -1,6 +1,9 @@
 name: Update prices
 
-# Every 30 minutes while the US market is open (13:30–20:00 UTC), plus once after the close.
+# Live prices for this week's stocks. GitHub's timer skips most runs, so one run stays alive
+# for the whole trading day: it refreshes quotes every 10 minutes while the market is open,
+# then does a final full update after the close. Any trigger (timer, or the hourly data
+# publish) starts it; triggers that arrive while it is already running exit straight away.
 on:
   schedule:
     - cron: "5,35 13-20 * * 1-5"
@@ -12,29 +15,54 @@ on:
 
 permissions:
   contents: write
-
-concurrency:
-  group: prices
-  cancel-in-progress: false
+  actions: read
 
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 350
+    env:
+      GH_TOKEN: ${{ github.token }}
     steps:
+      - name: Is another run already keeping prices fresh?
+        id: gate
+        run: |
+          N=$(gh run list -R "$GITHUB_REPOSITORY" -w prices.yml -s in_progress --json databaseId -q "[.[] | select(.databaseId < $GITHUB_RUN_ID)] | length" || echo 0)
+          echo "older runs in progress: $N"
+          if [ "$N" -gt 0 ]; then echo "go=0" >> "$GITHUB_OUTPUT"; else echo "go=1" >> "$GITHUB_OUTPUT"; fi
       - uses: actions/checkout@v4
+        if: steps.gate.outputs.go == '1'
       - uses: actions/setup-python@v5
+        if: steps.gate.outputs.go == '1'
         with:
           python-version: "3.12"
-      - name: Fetch prices
-        run: python3 tools/fetch_prices.py
-      - name: Commit if changed
+      - name: Update prices (keeps running while the market is open)
+        if: steps.gate.outputs.go == '1'
         run: |
           git config user.name "Signal Sheet bot"
           git config user.email "Jijimenez1@users.noreply.github.com"
-          git add docs/data/history.json
-          if [ -f docs/data/long.json ]; then git add docs/data/long.json; fi
-          if git diff --cached --quiet; then echo "No changes"; exit 0; fi
-          git commit -m "Update prices"
-          for i in 1 2 3; do git pull --rebase origin main && git push origin HEAD:main && exit 0; sleep 5; done
-          exit 1
+          save() {
+            git add docs/data/history.json
+            if [ -f docs/data/long.json ]; then git add docs/data/long.json; fi
+            if git diff --cached --quiet; then echo "No changes"; return 0; fi
+            git commit -qm "Update prices"
+            for i in 1 2 3; do git pull -q --rebase origin main && git push -q origin HEAD:main && return 0; sleep 5; done
+            echo "push failed; will retry on the next pass"; return 0
+          }
+          market_open() { python3 -c "import datetime as d, zoneinfo as z; n=d.datetime.now(z.ZoneInfo('America/New_York')); m=n.hour*60+n.minute; raise SystemExit(0 if n.weekday()<5 and 9*60+25<=m<16*60+5 else 1)"; }
+          START=$(date +%s)
+          python3 tools/fetch_prices.py || echo "price update failed this pass"
+          save
+          while market_open && [ $(( $(date +%s) - START )) -lt 19200 ]; do
+            sleep 600
+            git pull -q --rebase origin main || true
+            python3 tools/fetch_prices.py --quotes || echo "quote update failed this pass"
+            save
+          done
+          # after the bell: one full update so today's official close is recorded
+          if ! market_open && [ $(( $(date +%s) - START )) -gt 900 ]; then
+            sleep 420
+            git pull -q --rebase origin main || true
+            python3 tools/fetch_prices.py || echo "price update failed this pass"
+            save
+          fi

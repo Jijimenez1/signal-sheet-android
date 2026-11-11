@@ -1,14 +1,10 @@
 name: Update stock universe
 
 # Daily price files for every US stock over $1B plus major ETFs, published to the orphan
-# "data" branch (force-pushed each run, so the repo never grows). Runs about 6:40 PM and
-# 10:10 PM New York time on trading days (the second run picks up late-posted closes).
+# "data" branch (force-pushed each run, so the repo never grows).
 on:
-  schedule:
-    - cron: "40 23 * * 1-5"
-    - cron: "10 3 * * 2-6"
-  # GitHub's timer often runs hours late, so also piggyback on the price feed: the first
-  # price run after 4:15 PM New York time starts this job if today's data isn't out yet.
+  # Once per trading day: the first price-feed run that finishes after 4:15 PM New York time
+  # starts this job (GitHub's own timer proved hours late, and extra runs got us blocked).
   workflow_run:
     workflows: ["Update prices"]
     types: [completed]
@@ -45,7 +41,8 @@ jobs:
           ny = ZoneInfo("America/New_York"); now = dt.datetime.now(ny)
           cut = now.replace(hour=16, minute=15, second=0, microsecond=0)
           last = dt.datetime.fromtimestamp(int(sys.argv[1]), ny)
-          print("go=1" if now.weekday() < 5 and now >= cut and last < cut else "go=0")
+          stale = (now - last).total_seconds() > 30 * 3600  # yesterday's run never landed: catch up now
+          print("go=1" if (now.weekday() < 5 and now >= cut and last < cut) or stale else "go=0")
           PY
       - uses: actions/setup-python@v5
         if: steps.gate.outputs.go == '1'
@@ -53,9 +50,12 @@ jobs:
           python-version: "3.12"
       - name: Fetch universe
         if: steps.gate.outputs.go == '1'
-        run: python3 tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}"
+        run: |
+          git fetch -q --depth 1 origin data && git show FETCH_HEAD:universe.json > "$RUNNER_TEMP/old_universe.json" || true
+          python3 tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}" "$RUNNER_TEMP/old_universe.json"
+          if [ -f "$RUNNER_TEMP/u/universe.json" ]; then echo "PUBLISH=1" >> "$GITHUB_ENV"; fi
       - name: Publish data branch
-        if: steps.gate.outputs.go == '1'
+        if: steps.gate.outputs.go == '1' && env.PUBLISH == '1'
         run: |
           cd "$RUNNER_TEMP/u"
           git init -q -b data
