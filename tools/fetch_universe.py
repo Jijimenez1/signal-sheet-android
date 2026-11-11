@@ -92,11 +92,11 @@ SHORT = None  # set in main: ticker -> short-interest record
 
 
 def one(t, name, etf, out, now, scr=None):
-    for attempt in range(3):
+    for attempt in range(2):
         rows = history(t, etf)
         if rows:
             break
-        time.sleep(2 + attempt * 3)
+        time.sleep(2)
     if not rows:
         return t, "no data"
     why = valid(rows)
@@ -162,10 +162,16 @@ def main():
         print("short interest skipped:", str(e)[:120])
     names, fails = {}, []
     t0 = time.time()
-    with ThreadPoolExecutor(max_workers=4) as ex:
+    BUDGET = 40 * 60  # seconds; whatever isn't fetched by then counts as failed
+    ex = ThreadPoolExecutor(max_workers=4)
+    if True:
         futs = {ex.submit(one, t, n, e, out, now, sc): (t, n) for t, n, e, sc in jobs}
         for i, f in enumerate(as_completed(futs), 1):
             t, n = futs[f]
+            if time.time() - t0 > BUDGET:
+                print(f"time budget used up after {i} of {len(jobs)}", flush=True)
+                ex.shutdown(wait=False, cancel_futures=True)
+                break
             try:
                 _, err = f.result()
             except Exception as e:
@@ -175,7 +181,7 @@ def main():
             else:
                 names[t] = n
             if i % 250 == 0:
-                print(f"{i}/{len(jobs)} done, {len(fails)} failed, {time.time()-t0:.0f}s")
+                print(f"{i}/{len(jobs)} done, {len(fails)} failed, {time.time()-t0:.0f}s, blocked: {sorted(fp.BLOCKED)}", flush=True)
     print(f"{len(names)} tickers written, {len(fails)} failed")
     print("\n".join(fails[:60]))
     if fp.BLOCKED:

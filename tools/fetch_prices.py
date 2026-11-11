@@ -26,7 +26,7 @@ NY = ZoneInfo("America/New_York")
 NQ = {"Accept": "application/json", "Origin": "https://www.nasdaq.com", "Referer": "https://www.nasdaq.com/"}
 
 
-def get(url, headers=None, timeout=20):
+def get(url, headers=None, timeout=12):
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
@@ -65,6 +65,7 @@ def stooq(t):
     return sorted(rows.items())
 
 
+STALLS = {}  # source -> timeouts in a row
 BLOCKED = set()  # sources that refused us this run (HTTP 403/429): skipped for the rest of the run
 
 
@@ -75,9 +76,17 @@ def guard(name):
             if name in BLOCKED:
                 raise RuntimeError(f"{name}: skipped (blocked earlier this run)")
             try:
-                return fn(*a, **k)
+                r = fn(*a, **k)
+                STALLS[name] = 0
+                return r
             except urllib.error.HTTPError as e:
                 if e.code in (403, 429):
+                    BLOCKED.add(name)
+                raise
+            except (TimeoutError, urllib.error.URLError, ConnectionError):
+                # a source that stalls instead of answering is as good as blocked: three in a row and we move on
+                STALLS[name] = STALLS.get(name, 0) + 1
+                if STALLS[name] >= 3:
                     BLOCKED.add(name)
                 raise
         return inner

@@ -27,7 +27,7 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - name: Is today's data already out?
@@ -52,7 +52,7 @@ jobs:
         if: steps.gate.outputs.go == '1'
         run: |
           git fetch -q --depth 1 origin data && git show FETCH_HEAD:universe.json > "$RUNNER_TEMP/old_universe.json" || true
-          python3 tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}" "$RUNNER_TEMP/old_universe.json"
+          python3 -u tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}" "$RUNNER_TEMP/old_universe.json"
           if [ -f "$RUNNER_TEMP/u/universe.json" ]; then echo "PUBLISH=1" >> "$GITHUB_ENV"; fi
       - name: Publish data branch
         if: steps.gate.outputs.go == '1' && env.PUBLISH == '1'
