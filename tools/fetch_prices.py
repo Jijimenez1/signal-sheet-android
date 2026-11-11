@@ -304,6 +304,8 @@ def make_quote(rows, live, now=None, source="Nasdaq"):
         sdate = sd
     rows = list(rows)
     price, stamp, src = rows[-1][1], dt.date.fromisoformat(rows[-1][0]).strftime("%b %-d") + " close", None
+    if is_open and rows[-1][0] == sdate:  # a history source that already includes today's unfinished session
+        stamp = dt.date.fromisoformat(sdate).strftime("%b %-d") + ", during the session"
     if live and live[0] > 0 and abs(live[0] / rows[-1][1] - 1) < 0.35:  # sanity check against the last close
         price, src = live[0], source
         if is_open:
