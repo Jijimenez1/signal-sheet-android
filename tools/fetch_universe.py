@@ -77,8 +77,8 @@ HLV = fp.HLV  # highs/lows/volume collected by the history sources
 
 
 def history(t, etf):
-    """Daily closes: Nasdaq first, StockAnalysis when Nasdaq is blocking GitHub's servers."""
-    for fn in (fp.nasdaq, fp.stockanalysis):
+    """Daily closes: Nasdaq first, then StockAnalysis and Cboe when Nasdaq is blocking GitHub's servers."""
+    for fn in (fp.nasdaq, fp.stockanalysis, fp.cboe):
         try:
             rows = fn(t)
             if rows:
@@ -160,6 +160,7 @@ def main():
         SHORT = lambda t: extras.short_for(t, finra, shares)
     except Exception as e:
         print("short interest skipped:", str(e)[:120])
+    fp.SA_GAP = 0.3  # about 3 requests a second to the backup source
     names, fails = {}, []
     t0 = time.time()
     BUDGET = 40 * 60  # seconds; whatever isn't fetched by then counts as failed
@@ -186,9 +187,14 @@ def main():
     print("\n".join(fails[:60]))
     if fp.BLOCKED:
         print("blocked this run:", ", ".join(sorted(fp.BLOCKED)))
-    if len(names) < 0.8 * len(jobs):
-        print("Too many failures; leaving the published data as it is.")
+    if len(names) < 50:
+        print("Almost nothing could be fetched; leaving the published data as it is.")
         return
+    # Tickers that failed today keep the price file already published (the workflow starts OUT_DIR
+    # from the current data branch), so a partly blocked run still moves most stocks forward.
+    for t, n, _, _ in jobs:
+        if t not in names and (out / "px" / f"{t}.json").exists():
+            names[t] = n
     (out / "universe.json").write_text(json.dumps({"updated": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "tickers": dict(sorted(names.items()))}, separators=(",", ":")))
 
 

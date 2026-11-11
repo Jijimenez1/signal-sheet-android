@@ -51,7 +51,9 @@ jobs:
       - name: Fetch universe
         if: steps.gate.outputs.go == '1'
         run: |
-          git fetch -q --depth 1 origin data && git show FETCH_HEAD:universe.json > "$RUNNER_TEMP/old_universe.json" || true
+          # start from what is already published, so stocks that fail today keep their last good file
+          git clone -q --depth 1 -b data "https://github.com/${{ github.repository }}.git" "$RUNNER_TEMP/u" && cp "$RUNNER_TEMP/u/universe.json" "$RUNNER_TEMP/old_universe.json" && rm -rf "$RUNNER_TEMP/u/.git" || mkdir -p "$RUNNER_TEMP/u"
+          rm -f "$RUNNER_TEMP/u/universe.json"
           python3 -u tools/fetch_universe.py "$RUNNER_TEMP/u" "${{ github.event.inputs.limit || 0 }}" "$RUNNER_TEMP/old_universe.json"
           if [ -f "$RUNNER_TEMP/u/universe.json" ]; then echo "PUBLISH=1" >> "$GITHUB_ENV"; fi
       - name: Publish data branch

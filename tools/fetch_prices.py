@@ -13,7 +13,7 @@ The quote ("Today" change) is always computed here from the previous regular-ses
 never taken from a source's own change field, so after-hours moves can't leak into "Today".
 After the 4 PM close, the regular closing price is used and recorded as today's daily close.
 """
-import csv, datetime as dt, io, json, pathlib, re, sys, time, urllib.error, urllib.request
+import csv, datetime as dt, io, json, pathlib, re, sys, threading, time, urllib.error, urllib.request
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
@@ -96,11 +96,26 @@ def guard(name):
 SA_KIND = {}  # ticker -> "s" (stock) or "e" (ETF) on StockAnalysis
 
 
+SA_GAP = 0.0  # minimum seconds between StockAnalysis requests (set by bulk jobs so we don't hammer it)
+_sa_lock, _sa_last = threading.Lock(), [0.0]
+
+
+def sa_wait():
+    if SA_GAP <= 0:
+        return
+    with _sa_lock:
+        d = _sa_last[0] + SA_GAP - time.time()
+        if d > 0:
+            time.sleep(d)
+        _sa_last[0] = time.time()
+
+
 def sa_get(t, path):
     kinds = [SA_KIND[t]] if t in SA_KIND else (["e", "s"] if t in ("SPY", "QQQ", "VOO") else ["s", "e"])
     err = None
     for k in kinds:
         try:
+            sa_wait()
             j = json.loads(get(f"https://stockanalysis.com/api/{path.format(k=k, t=t)}", {"Accept": "application/json"}))
             if j.get("data"):
                 SA_KIND[t] = k
